@@ -1,216 +1,582 @@
 from pathlib import Path
-import math, re, html
+import math, re
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Construction Intelligence V5",page_icon="🏗️",layout="wide",initial_sidebar_state="expanded")
-BASE=Path(__file__).with_name("base_maestra_homologada_2392.csv")
-DEFAULT_H1_START=pd.Timestamp("2024-11-01"); DEFAULT_H1_END=pd.Timestamp("2025-08-31")
-DEFAULT_H2_START=pd.Timestamp("2025-09-01"); DEFAULT_H2_END=pd.Timestamp("2026-03-22")
-DEFAULT_H3_START=pd.Timestamp("2026-03-23"); DEFAULT_H3_END=pd.Timestamp("2026-08-31")
-STAGE_PLAN=[
-("Preparación y cimentación",1,3,["Cemento","Arena","Piedra","Varilla"]),
-("Estructura",3,8,["Varilla","Cemento","Malla","Concreto"]),
-("Mampostería",5,10,["Block","Cemento","Arena"]),
-("Cubierta",8,11,["Cubierta","Tornillería","Selladores"]),
-("Hidrosanitario",8,13,["PVC","Accesorios","Tubería"]),
-("Eléctrico",9,14,["Cable","Conduit","Cajas","Accesorios"]),
-("Repellos y preparación",12,16,["Morteros","Repellos","Cemento","Arena"]),
-("Cielos y divisiones",14,18,["Gypsum","Perfiles","Tornillería"]),
-("Pisos y enchapes",17,20,["Porcelanato","Cerámica","Bondex","Fragüe"]),
-("Pintura",18,22,["Pintura","Sellador","Accesorios"]),
-("Carpintería y acabados",20,23,["Puertas","Herrajes","Mobiliario"]),
-("Sanitarios y cierre",20,24,["Sanitarios","Grifería","Accesorios"]),]
+st.set_page_config(page_title="Construir Mejor", page_icon="🏠", layout="wide", initial_sidebar_state="expanded")
+BASE = Path(__file__).with_name("base_maestra_homologada_2392.csv")
+RECIPE_TYPES = ["Material permanente", "Material/consumible", "Consumible de obra"]
+CORE_LABELS = {
+    "Cemento gris 50 kg", "Arena", "Piedra / agregado", "Varilla #3", "Varilla #4",
+    "Block concreto 12x20x40", "Block concreto 15x20x40"
+}
+STAGE_PLAN = [
+    ("Preparación y cimentación",1,3),("Estructura",3,8),("Mampostería",5,10),("Cubierta",8,11),
+    ("Hidrosanitario",8,13),("Eléctrico",9,14),("Repellos y preparación",12,16),("Cielos y divisiones",14,18),
+    ("Pisos y enchapes",17,20),("Pintura",18,22),("Carpintería y acabados",20,23),("Sanitarios y cierre",20,24)
+]
 
 st.markdown("""<style>
-:root{color-scheme:light dark}
-.stApp{background:var(--background-color);color:var(--text-color)}
-.block-container{padding-top:1.2rem;padding-bottom:3rem;max-width:1500px}
-.hero{padding:25px 28px;border-radius:24px;background:linear-gradient(135deg,color-mix(in srgb,var(--primary-color) 18%,var(--background-color)),color-mix(in srgb,var(--secondary-background-color) 92%,var(--background-color)));border:1px solid color-mix(in srgb,var(--text-color) 14%,transparent);margin-bottom:18px}
-.hero .eyebrow{font-size:.76rem;letter-spacing:.18em;text-transform:uppercase;opacity:.66}.hero h1{font-size:2.15rem;margin:.2rem 0 .35rem}.hero p{opacity:.78;margin:0;max-width:940px}
-.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:10px 0 20px}.kpi,.house-card,.material-card,.rec-card,.explain{background:var(--secondary-background-color);color:var(--text-color);border:1px solid color-mix(in srgb,var(--text-color) 12%,transparent);box-shadow:0 8px 24px color-mix(in srgb,var(--text-color) 7%,transparent)}
-.kpi{border-radius:18px;padding:16px 18px}.kpi .label{font-size:.75rem;opacity:.62;text-transform:uppercase;letter-spacing:.08em}.kpi .value{font-size:1.48rem;font-weight:820;margin-top:3px}.kpi .sub{font-size:.8rem;opacity:.62;margin-top:3px}
-.house-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:12px 0 22px}.house-card{position:relative;border-radius:22px;padding:18px 20px;overflow:hidden}.house-card:after{content:"";position:absolute;right:-35px;top:-35px;width:110px;height:110px;border-radius:50%;background:color-mix(in srgb,var(--primary-color) 15%,transparent)}.house-icon{font-size:1.8rem}.house-name{font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;opacity:.62;margin-top:5px}.house-cost{font-size:1.65rem;font-weight:850}.delta-up{color:#e35d54;font-weight:760}.delta-down{color:#31b887;font-weight:760}.delta-flat{opacity:.68;font-weight:760}
-.material-card,.rec-card{border-radius:18px;padding:14px 16px;margin-bottom:10px}.material-card .title,.rec-card .supplier{font-weight:820}.material-card .meta,.rec-card .meta{font-size:.82rem;opacity:.63;margin-top:3px}.rec-card .rank{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;opacity:.6}.rec-card .signal{font-size:.84rem;font-weight:760;margin-top:4px}
-.explain{border-radius:14px;padding:10px 13px;margin:5px 0 16px;font-size:.86rem;box-shadow:none}.explain b{font-weight:800}.chip{display:inline-block;padding:5px 9px;border-radius:999px;background:color-mix(in srgb,var(--primary-color) 13%,var(--secondary-background-color));font-size:.75rem;margin:2px 3px 2px 0}.sourcebox{background:var(--secondary-background-color);border:1px dashed color-mix(in srgb,var(--text-color) 22%,transparent);border-radius:14px;padding:12px 14px;font-size:.87rem;opacity:.9}
-[data-testid="stDataFrame"]{border-radius:16px;overflow:hidden;border:1px solid color-mix(in srgb,var(--text-color) 13%,transparent)}div[data-testid="stMetric"]{background:var(--secondary-background-color);border:1px solid color-mix(in srgb,var(--text-color) 12%,transparent);padding:12px 14px;border-radius:16px}
-@media(max-width:900px){.kpi-grid,.house-row{grid-template-columns:1fr}.hero h1{font-size:1.65rem}}
-</style>""",unsafe_allow_html=True)
+:root{color-scheme:light dark}.block-container{padding-top:1rem;padding-bottom:3rem;max-width:1550px}
+.hero{padding:24px 28px;border-radius:23px;background:linear-gradient(135deg,color-mix(in srgb,var(--primary-color) 17%,var(--background-color)),color-mix(in srgb,var(--secondary-background-color) 94%,var(--background-color)));border:1px solid color-mix(in srgb,var(--text-color) 13%,transparent);margin-bottom:15px}
+.hero .eyebrow{font-size:.75rem;letter-spacing:.16em;text-transform:uppercase;opacity:.62}.hero h1{font-size:2.15rem;margin:.18rem 0 .35rem}.hero p{opacity:.78;margin:0;max-width:1000px}
+.story-flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0 19px}
+.story-step{position:relative;padding:15px 16px;border-radius:18px;background:var(--secondary-background-color);border:1px solid color-mix(in srgb,var(--text-color) 12%,transparent);min-height:110px}
+.story-step .n{font-size:.68rem;text-transform:uppercase;letter-spacing:.12em;opacity:.55}
+.story-step .big{font-size:1.2rem;font-weight:850;margin:.2rem 0}
+.story-step .small{font-size:.79rem;opacity:.68}
+.story-step:not(:last-child):after{content:'→';position:absolute;right:-10px;top:40%;font-size:1.2rem;font-weight:900;z-index:2}
+.story-callout{padding:17px 19px;border-radius:18px;border:1px solid color-mix(in srgb,var(--primary-color) 35%,var(--text-color));background:color-mix(in srgb,var(--primary-color) 8%,var(--secondary-background-color));margin:10px 0 18px}
+.story-callout .headline{font-size:1.05rem;font-weight:850;margin-bottom:5px}
+@media(max-width:900px){.story-flow{grid-template-columns:1fr 1fr}.story-step:not(:last-child):after{display:none}}
+@media(max-width:600px){.story-flow{grid-template-columns:1fr}}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:10px 0 18px}.kpi,.card,.explain,.sourcebox{background:var(--secondary-background-color);border:1px solid color-mix(in srgb,var(--text-color) 12%,transparent)}
+.kpi{border-radius:18px;padding:15px 17px}.kpi .label{font-size:.72rem;opacity:.62;text-transform:uppercase;letter-spacing:.08em}.kpi .value{font-size:1.45rem;font-weight:820;margin-top:3px}.kpi .sub{font-size:.78rem;opacity:.62;margin-top:3px}
+.card{border-radius:18px;padding:14px 16px;margin:7px 0}.card .title{font-weight:820}.card .meta{font-size:.82rem;opacity:.67;margin-top:3px}.explain,.sourcebox{border-radius:14px;padding:11px 14px;margin:7px 0 16px;font-size:.86rem}.sourcebox{border-style:dashed}.chip{display:inline-block;padding:5px 9px;border-radius:999px;background:color-mix(in srgb,var(--primary-color) 13%,var(--secondary-background-color));font-size:.74rem;margin:2px 3px 2px 0}
+[data-testid="stDataFrame"]{border-radius:15px;overflow:hidden;border:1px solid color-mix(in srgb,var(--text-color) 12%,transparent)}
+@media(max-width:900px){.kpi-grid{grid-template-columns:1fr 1fr}.hero h1{font-size:1.65rem}}@media(max-width:600px){.kpi-grid{grid-template-columns:1fr}}
+</style>""", unsafe_allow_html=True)
 
-def chart_explain(read,decision):
-    st.markdown(f"<div class='explain'><b>Cómo leerlo:</b> {read}<br><b>Qué decisión ayuda a tomar:</b> {decision}</div>",unsafe_allow_html=True)
-def money(v): return "—" if pd.isna(v) else f"₡{v:,.0f}".replace(",",".")
-def pct(v): return "—" if pd.isna(v) or not np.isfinite(v) else f"{v:+.1f}%"
-def clean_text(s):
-    s=str(s).lower().replace('ñ','n'); s=re.sub(r'[^a-z0-9/#.x\s]+',' ',s); return re.sub(r'\s+',' ',s).strip()
+def money(v):
+    return "—" if pd.isna(v) else f"₡{v:,.0f}".replace(",", ".")
+def pct(v):
+    return "—" if pd.isna(v) or not np.isfinite(v) else f"{v:+.1f}%"
+def explain(read, decision):
+    st.markdown(f"<div class='explain'><b>Cómo leerlo:</b> {read}<br><b>Qué decisión ayuda a tomar:</b> {decision}</div>", unsafe_allow_html=True)
+def clean(s):
+    return re.sub(r"\s+"," ",re.sub(r"[^a-z0-9/#.xáéíóúñ\s]+"," ",str(s).lower())).strip()
+
 def extract_size(desc):
-    s=clean_text(desc)
-    for p in [r'\b\d+(?:\.\d+)?x\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)?\b',r'\b\d+\s+\d+/\d+\b',r'\b\d+/\d+\b',r'\b\d+\s*mm\b',r'\b\d+\s*cm\b']:
-        m=re.search(p,s)
-        if m:return m.group(0)
+    s=clean(desc)
+    patterns=[r'\b\d+(?:\.\d+)?x\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)?\b',r'\b\d+\s+\d+/\d+\b',r'\b\d+/\d+\b',r'\b\d+(?:\.\d+)?\s*mm\b',r'\b\d+(?:\.\d+)?\s*cm\b',r'\b#\s*\d+\b']
+    for pat in patterns:
+        m=re.search(pat,s)
+        if m: return m.group(0)
     return ''
-def commercial_unit(row):
-    d=clean_text(row['Descripcion_original']); mat=clean_text(row['Material_homologado']); prov=clean_text(row['Proveedor']); pres=str(row.get('Presentacion','') or '')
-    if pd.notna(row.get('Kg_por_unidad')) and float(row.get('Kg_por_unidad'))>0:return pres
-    for word,label in [('paquete','Paquete'),('bolsa','Bolsa'),('caja','Caja'),('rollo','Rollo'),('juego','Juego'),('set','Set')]:
-        if word in d:return label
-    if 'clavo' in mat and 'epa' in prov:return 'Paquete/bolsa EPA'
-    return pres if pres and pres!='nan' else 'Unidad comercial'
-def comparable_key(row):
-    mat=str(row['Material_homologado']); size=extract_size(row['Descripcion_original']); unit=row['Unidad_comercial']
-    if any(k in clean_text(mat) for k in ['clavo','tornillo','perno','arandela','grapa']): return ' · '.join([x for x in [mat,size,unit] if x])
-    return f"{mat} · {row['Presentacion']}"
 
-@st.cache_data
+def commercial_unit(row):
+    d=clean(row.get('Descripcion_original','')); mat=clean(row.get('Material_homologado','')); prov=clean(row.get('Proveedor','')); pres=str(row.get('Presentacion','') or '')
+    if pd.notna(row.get('Kg_por_unidad')) and float(row.get('Kg_por_unidad') or 0)>0: return pres or 'Unidad con peso conocido'
+    for word,label in [('paquete','Paquete'),('bolsa','Bolsa'),('caja','Caja'),('rollo','Rollo'),('juego','Juego'),('set','Set')]:
+        if word in d: return label
+    if 'clavo' in mat and 'epa' in prov: return 'Paquete/bolsa EPA'
+    return pres if pres and pres!='nan' else 'Unidad comercial'
+
+def comparable_key(row):
+    mat=str(row.get('Material_homologado','')); size=extract_size(row.get('Descripcion_original','')); unit=str(row.get('Unidad_comercial',''))
+    parts=[mat]
+    if size: parts.append(size)
+    if unit: parts.append(unit)
+    return ' · '.join(parts)
+
+def add_component(d):
+    x=d.copy()
+    txt=(x.Material_homologado.fillna('')+' '+x.Familia.fillna('')+' '+x.Descripcion_original.fillna('')).str.lower()
+    x['Componente_fisico']='Otros materiales de la vivienda'
+    x.loc[txt.str.contains(r'melamin|mueble|closet|gabinet|bisagra|tapacanto|corredera',regex=True),'Componente_fisico']='Carpintería / muebles de melamina'
+    x.loc[txt.str.contains(r'policarbon|cubierta|lamina techo|perfil h base|edpm',regex=True),'Componente_fisico']='Cubierta frontal / techo'
+    x.loc[txt.str.contains(r'inodoro|lavaman|ducha|sanitari|grifer',regex=True),'Componente_fisico']='Baños / aparatos sanitarios'
+    x.loc[txt.str.contains(r'puerta|cerradura|marco puerta|tope puerta',regex=True),'Componente_fisico']='Puertas y herrajes'
+    x.loc[txt.str.contains(r'ventana|vidrio|espejo',regex=True),'Componente_fisico']='Ventanas / vidrio'
+    x.loc[txt.str.contains(r'block|cemento|arena|piedra|varilla|acero refuerzo',regex=True),'Componente_fisico']='Estructura y obra gris'
+    x.loc[txt.str.contains(r'cable|conduit|tomacorr|interruptor|breaker|electr',regex=True),'Componente_fisico']='Instalación eléctrica'
+    x.loc[txt.str.contains(r'pvc|tuber|sifon|hidro|plomer',regex=True),'Componente_fisico']='Instalación hidrosanitaria'
+    x.loc[txt.str.contains(r'pintura|sellador|esmalte|brocha|rodillo',regex=True),'Componente_fisico']='Pintura y acabados'
+    x.loc[txt.str.contains(r'porcel|ceram|piso|enchape|fragüe|frague|bondex',regex=True),'Componente_fisico']='Pisos y enchapes'
+    return x
+
+@st.cache_data(show_spinner=False)
 def load_data():
-    d=pd.read_csv(BASE); d['Fecha']=pd.to_datetime(d['Fecha'],errors='coerce')
-    for c in ['Cantidad','Precio_unitario','Total_linea','Kg_por_unidad','Precio_por_kg','Relevancia']:d[c]=pd.to_numeric(d[c],errors='coerce')
-    for c in ['Descripcion_original','Material_homologado','Presentacion','Familia','Proveedor','Tipo_registro']:d[c]=d[c].fillna('')
-    weight_material=d['Material_homologado'].str.contains(r'bond|cemento|mortero|repello|fragüe|frague|pegamento',case=False,regex=True,na=False)
-    for idx in d[d['Kg_por_unidad'].isna() & weight_material].index:
-        txt=clean_text(d.at[idx,'Descripcion_original']); m=re.search(r'\b(\d+(?:\.\d+)?)\s*(?:kg|kgs|kls|k)\b',txt)
+    d=pd.read_csv(BASE)
+    d['Fecha']=pd.to_datetime(d['Fecha'],errors='coerce')
+    for c in ['Cantidad','Precio_unitario','Total_linea','Kg_por_unidad','Precio_por_kg','Relevancia']:
+        d[c]=pd.to_numeric(d[c],errors='coerce')
+    for c in ['Proveedor','Factura','Descripcion_original','Material_homologado','Familia','Tipo_registro','Presentacion','Casa3_regla_23mar','Confianza_homologacion']:
+        d[c]=d[c].fillna('')
+    d['Es_flete']=d.Descripcion_original.str.contains(r'flete|transporte|acarreo|env[ií]o|entrega',case=False,regex=True,na=False) | d.Material_homologado.str.contains('Transporte / flete',case=False,na=False)
+    # Mantener presentación comercial; normalizar a kg solo cuando el peso es conocido.
+    weightish=d.Material_homologado.str.contains(r'cemento|mortero|repello|fragüe|frague|bondex|pegamento',case=False,regex=True,na=False)
+    for idx in d[d.Kg_por_unidad.isna() & weightish].index:
+        m=re.search(r'\b(\d+(?:\.\d+)?)\s*(?:kg|kgs|kls)\b',clean(d.at[idx,'Descripcion_original']))
         if m:
             kg=float(m.group(1)); d.at[idx,'Kg_por_unidad']=kg
-            if d.at[idx,'Precio_unitario']>0:d.at[idx,'Precio_por_kg']=d.at[idx,'Precio_unitario']/kg
-            if d.at[idx,'Presentacion'] in ('','Unidad'):d.at[idx,'Presentacion']=f'Saco/bolsa {kg:g} kg'
-    d['Es_flete']=d['Descripcion_original'].str.contains(r'flete|transporte|acarreo|env[ií]o|entrega',case=False,regex=True,na=False)
-    d['Unidad_comercial']=d.apply(commercial_unit,axis=1); d['Comparable']=d.apply(comparable_key,axis=1); return d
+            if pd.notna(d.at[idx,'Precio_unitario']) and d.at[idx,'Precio_unitario']>0:
+                d.at[idx,'Precio_por_kg']=d.at[idx,'Precio_unitario']/kg
+    d['Unidad_comercial']=d.apply(commercial_unit,axis=1)
+    d['Variante_comparable']=d.apply(comparable_key,axis=1)
+    d=add_component(d)
+    return d
 
-def assign_houses(d,h1s,h1e,h2s,h2e,h3s,h3e):
-    o=d.copy();o['Casa']='Fuera de ventanas';o.loc[o.Fecha.between(h1s,h1e),'Casa']='Casa 1';o.loc[o.Fecha.between(h2s,h2e),'Casa']='Casa 2';o.loc[o.Fecha.between(h3s,h3e),'Casa']='Casa 3';return o
-def scope_data(d):return d[d.Tipo_registro.isin(['Material permanente','Material/consumible','Consumible de obra','Otro registrado'])].copy()
-def latest_trend(g,metric):
-    z=g.dropna(subset=['Fecha',metric]).sort_values('Fecha')
-    if z.empty:return np.nan,'Sin datos',0.0
-    latest=float(z.iloc[-1][metric]); first=float(z.iloc[0][metric]); ch=((latest-first)/first*100) if len(z)>1 and first else 0; sig='Subiendo' if ch>5 else ('Bajando' if ch<-5 else ('Estable' if len(z)>1 else 'Sin tendencia'));return latest,sig,ch
-def supplier_stats(x,metric):
+def add_fiscal(d,tax):
+    x=d.copy()
+    x['Precio_sin_impuesto']=x.Precio_unitario
+    x['Subtotal_sin_impuesto']=x.Total_linea
+    x['Impuesto_estimado']=x.Total_linea*tax
+    x['Precio_con_impuesto']=x.Precio_unitario*(1+tax)
+    x['Total_con_impuesto']=x.Total_linea*(1+tax)
+    x['Precio_por_kg_con_impuesto']=x.Precio_por_kg*(1+tax)
+    return x
+
+def recipe_base(d,value_col):
+    m=d[d.Tipo_registro.isin(RECIPE_TYPES) & ~d.Es_flete].copy()
+    keys=['Material_homologado','Familia','Presentacion','Unidad_comercial','Variante_comparable','Componente_fisico','Tipo_registro']
+    total=m.groupby(keys,dropna=False,as_index=False).agg(
+        Cantidad_total_4_casas=('Cantidad','sum'), Costo_total_4_casas=(value_col,'sum'), Lineas_fuente=('Linea_id','count')
+    )
+    core=m[m.Casa3_regla_23mar.eq('Sí') & m.Material_homologado.isin(CORE_LABELS)].groupby(keys,dropna=False,as_index=False).agg(
+        Cantidad_por_casa=('Cantidad','sum'), Costo_por_casa=(value_col,'sum'), Lineas_confirmadas=('Linea_id','count')
+    )
+    core=core.merge(total,on=keys,how='left')
+    core['Metodo']='Confirmado · última casa > 23/03/2026'
+    core['Confianza_receta']='Confirmado'
+    core_mats=set(core.Material_homologado)
+    other=total[~total.Material_homologado.isin(core_mats)].copy()
+    other['Cantidad_por_casa']=other.Cantidad_total_4_casas/4
+    other['Costo_por_casa']=other.Costo_total_4_casas/4
+    other['Lineas_confirmadas']=0
+    other['Metodo']='Estimado · total consolidado ÷ 4'
+    other['Confianza_receta']='Estimado'
+    # Superblock se conserva visible pero no se trata como block convencional.
+    sb=other.Material_homologado.str.contains('Sistema Superblock',case=False,na=False)
+    other.loc[sb,'Confianza_receta']='Revisar sistema'
+    other.loc[sb,'Metodo']='Revisar · sistema constructivo no comparable a block convencional'
+    cols=keys+['Cantidad_total_4_casas','Cantidad_por_casa','Costo_total_4_casas','Costo_por_casa','Lineas_fuente','Lineas_confirmadas','Metodo','Confianza_receta']
+    r=pd.concat([core[cols],other[cols]],ignore_index=True)
+    rel=m.groupby('Material_homologado').Relevancia.min()
+    r['Relevancia']=r.Material_homologado.map(rel).fillna(5)
+    return r.sort_values(['Confianza_receta','Relevancia','Costo_por_casa'],ascending=[True,True,False])
+
+def supplier_stats(d,metric,value_col):
     rows=[]
-    for p,g in x.groupby('Proveedor'):
-        latest,tr,ch=latest_trend(g,metric);rows.append({'Proveedor':p,'Precio_min':g[metric].min(),'Precio_max':g[metric].max(),'Total_gastado':g.Total_linea.sum(),'Ultimo_precio':latest,'Tendencia':tr,'Cambio_pct':ch,'Compras':g.Factura.nunique()})
+    for p,g in d.groupby('Proveedor'):
+        z=g.dropna(subset=[metric]).sort_values('Fecha')
+        if z.empty: continue
+        first=float(z.iloc[0][metric]); last=float(z.iloc[-1][metric])
+        ch=((last-first)/first*100) if first else 0
+        tr='Subiendo' if ch>5 else ('Bajando' if ch<-5 else 'Estable')
+        rows.append({'Proveedor':p,'MIN':z[metric].min(),'MAX':z[metric].max(),'Ultimo':last,'Total_gastado':g[value_col].sum(),'Compras':g.Factura.nunique(),'Cambio_pct':ch,'Tendencia':tr})
     return pd.DataFrame(rows)
-def recipe_base(d):
-    perm=d[d.Tipo_registro.isin(['Material permanente','Material/consumible'])].copy();core=perm[perm.Casa3_regla_23mar.eq('Sí')].groupby(['Material_homologado','Familia','Presentacion'],as_index=False).agg(Cantidad_base=('Cantidad','sum'),Costo_hist=('Total_linea','sum'));core['Metodo']='Casa 3 confirmada';used=set(core.Material_homologado);other=perm[~perm.Material_homologado.isin(used)].groupby(['Material_homologado','Familia','Presentacion'],as_index=False).agg(Cantidad_total=('Cantidad','sum'),Costo_hist=('Total_linea','sum'));other['Cantidad_base']=other.Cantidad_total/3;other['Metodo']='Histórico total ÷ 3';other=other[['Material_homologado','Familia','Presentacion','Cantidad_base','Costo_hist','Metodo']];r=pd.concat([core,other],ignore_index=True);rel=perm.groupby('Material_homologado').Relevancia.min();r['Relevancia']=r.Material_homologado.map(rel).fillna(5);return r.sort_values(['Relevancia','Costo_hist','Cantidad_base'],ascending=[True,False,False])
-def drivers(a,b):
-    aa=a.groupby('Material_homologado').Total_linea.sum();bb=b.groupby('Material_homologado').Total_linea.sum();c=pd.concat([aa.rename('A'),bb.rename('B')],axis=1).fillna(0);c['Delta']=c.B-c.A;c['AbsDelta']=c.Delta.abs();return c.sort_values('AbsDelta',ascending=False)
-def signal_text(trend,current,target):
-    gap=(current-target)/target*100 if target and target>0 else 0
-    if trend=='Subiendo':return '⚡ Negociar pronto',f'El precio viene subiendo. Conviene cerrar cotizaciones antes de que se aleje más del mínimo histórico; brecha actual {gap:.1f}%.'
-    if trend=='Bajando':return '🟢 Cotizar antes de cerrar',f'La tendencia es favorable. Compare precios recientes antes de adelantar todo el pedido; brecha al mejor histórico {gap:.1f}%.'
-    if gap<=5:return '✅ Buen rango',f'El precio reciente está cerca del mejor nivel histórico; brecha {gap:.1f}%.'
-    return '🎯 Negociar',f'El precio está estable, pero existe una brecha de {gap:.1f}% frente al mejor histórico comparable.'
-def build_animation(n_houses):
-    stages=''.join([f"<div class='stage' style='--d:{i*0.15}s'><span>{i+1}</span><b>{html.escape(s[0])}</b><small>Sem {s[1]}–{s[2]}</small></div>" for i,s in enumerate(STAGE_PLAN)])
-    houses=''.join(["<div class='house'><div class='roof'></div><div class='body'><div class='floor f2'></div><div class='floor f1'></div><div class='door'></div><div class='window w1'></div><div class='window w2'></div></div><label>Casa "+str(4+i)+"</label></div>" for i in range(n_houses)])
-    components.html(f"""<div id='buildv5'><style>#buildv5{{font-family:system-ui;color:CanvasText;background:Canvas;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:22px;padding:18px}}.wrap{{display:grid;grid-template-columns:minmax(220px,.7fr) minmax(360px,1.5fr);gap:22px;align-items:center}}.houses{{display:flex;gap:22px;justify-content:center;flex-wrap:wrap}}.house{{width:120px;text-align:center;position:relative;padding-top:40px}}.roof{{width:0;height:0;border-left:66px solid transparent;border-right:66px solid transparent;border-bottom:54px solid color-mix(in srgb,CanvasText 75%,transparent);position:absolute;left:-6px;top:0;animation:drop .65s ease both}}.body{{height:135px;border:4px solid color-mix(in srgb,CanvasText 65%,transparent);border-radius:4px;position:relative;overflow:hidden;background:color-mix(in srgb,Canvas 88%,CanvasText)}}.floor{{position:absolute;left:0;right:0;height:50%;background:color-mix(in srgb,#19b99a 38%,Canvas);transform-origin:bottom;animation:fill 1.2s cubic-bezier(.2,.8,.2,1) both}}.f1{{bottom:0;animation-delay:.25s}}.f2{{top:0;animation-delay:.8s}}.door{{position:absolute;width:25px;height:45px;bottom:0;left:47px;background:Canvas}}.window{{position:absolute;width:22px;height:22px;border:2px solid CanvasText;top:28px;background:color-mix(in srgb,#ffcf57 55%,Canvas)}}.w1{{left:18px}}.w2{{right:18px}}.house label{{display:block;margin-top:8px;font-weight:800}}.timeline{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}}.stage{{border:1px solid color-mix(in srgb,CanvasText 13%,transparent);border-radius:12px;padding:8px;opacity:0;transform:translateY(7px);animation:show .45s ease forwards;animation-delay:var(--d)}}.stage span{{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:color-mix(in srgb,#19b99a 24%,Canvas);font-size:11px;font-weight:800;margin-right:5px}}.stage b{{font-size:12px}}.stage small{{display:block;opacity:.62;margin-top:4px}}@keyframes fill{{from{{transform:scaleY(0)}}to{{transform:scaleY(1)}}}}@keyframes drop{{from{{transform:translateY(-12px);opacity:0}}to{{transform:none;opacity:1}}}}@keyframes show{{to{{opacity:1;transform:none}}}}@media(prefers-reduced-motion:reduce){{*{{animation:none!important;opacity:1!important;transform:none!important}}}}@media(max-width:700px){{.wrap{{grid-template-columns:1fr}}.timeline{{grid-template-columns:repeat(2,1fr)}}}}</style><div class='wrap'><div class='houses'>{houses}</div><div><h3 style='margin:0 0 8px'>Ruta de construcción y abastecimiento</h3><p style='margin:0 0 12px;opacity:.68;font-size:13px'>La animación ilustra cómo el plan de compras acompaña las etapas; no representa avance real.</p><div class='timeline'>{stages}</div></div></div></div>""",height=485,scrolling=False)
 
-df=load_data()
-st.markdown("""<div class='hero'><div class='eyebrow'>Construction Intelligence · V5</div><h1>De facturas históricas a decisiones de construcción</h1><p>2.392 líneas homologadas convertidas en costo por casa, drivers, receta, inteligencia de proveedores y un plan visual para Casas 4 y 5.</p></div>""",unsafe_allow_html=True)
+def recipe_cost_trend(d,recipe,price_col):
+    # Canasta fija: cantidades de receta no cambian; solo cambian precios históricos.
+    x=d[d.Fecha.notna() & d.Cantidad.gt(0) & d[price_col].gt(0)].copy()
+    x['Mes']=x.Fecha.dt.to_period('M').dt.to_timestamp()
+    keys=['Variante_comparable']
+    rr=recipe.groupby(keys,as_index=False).Cantidad_por_casa.sum()
+    obs=x.groupby(keys+['Mes'],as_index=False)[price_col].median().rename(columns={price_col:'Precio'})
+    if rr.empty or obs.empty: return pd.DataFrame()
+    months=pd.DataFrame({'Mes':pd.date_range(obs.Mes.min(),obs.Mes.max(),freq='MS')})
+    g=rr[keys].drop_duplicates(); g['_k']=1; months['_k']=1
+    grid=g.merge(months,on='_k').drop(columns='_k').merge(obs,on=keys+['Mes'],how='left').sort_values(keys+['Mes'])
+    grid['Precio_util']=grid.groupby(keys).Precio.ffill()
+    grid=grid.merge(rr,on=keys,how='left')
+    grid['Costo']=grid.Cantidad_por_casa*grid.Precio_util
+    latest=obs.sort_values('Mes').groupby(keys,as_index=False).tail(1).rename(columns={'Precio':'Precio_ref'})
+    ref=rr.merge(latest,on=keys,how='inner'); ref['Costo_ref']=ref.Cantidad_por_casa*ref.Precio_ref
+    total_ref=ref.Costo_ref.sum()
+    covered=grid[grid.Precio_util.notna()].merge(ref[keys+['Costo_ref']],on=keys,how='left').groupby('Mes',as_index=False).Costo_ref.sum()
+    out=grid.groupby('Mes',as_index=False).agg(Costo_receta=('Costo','sum'),Grupos=('Precio_util','count')).merge(covered,on='Mes',how='left')
+    out['Cobertura_pct']=np.where(total_ref>0,out.Costo_ref/total_ref*100,0)
+    valid=out[out.Cobertura_pct>=70]
+    base=float(valid.iloc[0].Costo_receta) if len(valid) else np.nan
+    out['Indice']=out.Costo_receta/base*100 if pd.notna(base) and base else np.nan
+    return out
+
+def stage_for_family(fam):
+    f=clean(fam)
+    if any(k in f for k in ['cement','agregado','acero','block','mamposter']): return 'Obra gris / estructura'
+    if any(k in f for k in ['electric']): return 'Eléctrico'
+    if any(k in f for k in ['plomer','sanitaria','potable']): return 'Hidrosanitario'
+    if any(k in f for k in ['gypsum','liviano']): return 'Cielos y divisiones'
+    if any(k in f for k in ['piso','enchape','ceram']): return 'Pisos y enchapes'
+    if any(k in f for k in ['pintura','acabado']): return 'Pintura / acabados'
+    if any(k in f for k in ['carpinter','madera','puerta','cerradura']): return 'Carpintería / cierre'
+    return 'Otros'
+
+def price_metric_for_material(x,price_view):
+    kg_col='Precio_por_kg_con_impuesto' if price_view=='Costo final con impuesto' else 'Precio_por_kg'
+    unit_col='Precio_con_impuesto' if price_view=='Costo final con impuesto' else 'Precio_sin_impuesto'
+    if x[kg_col].notna().sum()>=2: return kg_col,'₡/kg'
+    return unit_col,'₡/presentación'
+
+def plan_future(d,recipe,value_col,price_view,n_houses,waste):
+    rows=[]
+    candidates=recipe[~recipe.Confianza_receta.eq('Revisar sistema')].sort_values(['Relevancia','Costo_por_casa'],ascending=[True,False]).head(60)
+    for _,r in candidates.iterrows():
+        x=d[(d.Variante_comparable.eq(r.Variante_comparable)) & d.Fecha.notna()].copy()
+        if x.empty: continue
+        metric,unit=price_metric_for_material(x,price_view); x=x[x[metric].gt(0)]
+        ss=supplier_stats(x,metric,value_col)
+        if ss.empty: continue
+        mn,mx=ss.Ultimo.min(),ss.Ultimo.max(); span=max(mx-mn,1)
+        ss['Score']=0.58*((ss.Ultimo-mn)/span)+0.27*(ss.Cambio_pct.clip(-30,30)/60+0.5)-0.15*(np.minimum(ss.Compras,5)/5)
+        ss=ss.sort_values('Score'); p1=ss.iloc[0]; p2=ss.iloc[1] if len(ss)>1 else None
+        target=float(ss.MIN.min()); qty=float(r.Cantidad_por_casa)*(1+waste)*n_houses
+        est=qty*float(p1.Ultimo); target_cost=qty*target
+        rows.append({
+            'Material_homologado':r.Material_homologado,'Familia':r.Familia,'Presentacion':r.Presentacion,'Unidad_comercial':r.Unidad_comercial,'Variante_comparable':r.Variante_comparable,'Cantidad_meta':qty,
+            'Proveedor_1':p1.Proveedor,'Precio_actual':p1.Ultimo,'Tendencia':p1.Tendencia,'Cambio_pct':p1.Cambio_pct,
+            'Proveedor_2':p2.Proveedor if p2 is not None else '—','Precio_2':p2.Ultimo if p2 is not None else np.nan,
+            'Precio_meta':target,'Metrica':unit,'Costo_estimado':est,'Costo_meta':target_cost,'Ahorro_potencial':max(est-target_cost,0),
+            'Confianza_receta':r.Confianza_receta,'Metodo':r.Metodo
+        })
+    return pd.DataFrame(rows)
+
+# ---------------- Sidebar / assumptions ----------------
+df0=load_data()
 with st.sidebar:
-    st.header('⚙️ Parámetros');st.caption('Las ventanas son editables porque el Excel no contiene una columna formal Casa 1/2/3.')
-    h1s=st.date_input('Casa 1 · inicio',DEFAULT_H1_START.date());h1e=st.date_input('Casa 1 · fin',DEFAULT_H1_END.date());h2s=st.date_input('Casa 2 · inicio',DEFAULT_H2_START.date());h2e=st.date_input('Casa 2 · fin',DEFAULT_H2_END.date());h3s=st.date_input('Casa 3 · inicio',DEFAULT_H3_START.date());h3e=st.date_input('Casa 3 · fin',DEFAULT_H3_END.date());waste=st.slider('Margen de seguridad Casa 4/5',0,20,7,1)/100;future_houses=st.radio('Planificar',['Casa 4','Casa 5','Casas 4 + 5'],index=2);n_future=2 if future_houses=='Casas 4 + 5' else 1;st.divider();st.caption('23/03/2026: solo arena, block, piedra, cemento y varilla se atribuyen directamente a Casa 3.')
-hdf=assign_houses(df,pd.Timestamp(h1s),pd.Timestamp(h1e),pd.Timestamp(h2s),pd.Timestamp(h2e),pd.Timestamp(h3s),pd.Timestamp(h3e));scope=scope_data(hdf);inh=scope[scope.Casa.isin(['Casa 1','Casa 2','Casa 3'])].copy();freight=scope[scope.Es_flete & (scope.Total_linea>1)].copy()
-labels=['✨ Historia ejecutiva','🧱 Receta visual','🏪 Material × proveedor','📈 Evolución de precio','🎯 Casas 4 y 5','🔎 Explorador maestro']
-if len(freight):labels.insert(4,'🚚 Fletes')
-tabs=st.tabs(labels);ti={name:tabs[i] for i,name in enumerate(labels)}
+    st.header('⚙️ Supuestos')
+    st.markdown("<div class='sourcebox'><b>Receta:</b> 4 casas esencialmente iguales. Regla general = total consolidado ÷ 4.</div>",unsafe_allow_html=True)
+    st.markdown("<div class='sourcebox'><b>Excepción confirmada:</b> block, arena, cemento, piedra y varilla posteriores al 23/03/2026 corresponden a la última casa.</div>",unsafe_allow_html=True)
+    tax_pct=st.number_input('Impuesto para estimación (%)',min_value=0.0,max_value=30.0,value=13.0,step=0.5)
+    price_view=st.radio('Vista monetaria',['Costo final con impuesto','Precio sin impuesto'],index=0)
+    st.caption('La base recibida está sin impuesto. El monto con impuesto es una estimación según la tasa seleccionada.')
+    waste_pct=st.slider('Margen de seguridad Casas 5/6 (%)',min_value=0,max_value=20,value=7,step=1)
+    future=st.radio('Plan futuro',['Casa 5','Casa 6','Casas 5 + 6'],index=2)
 
-with ti['✨ Historia ejecutiva']:
-    costs=inh.groupby('Casa').Total_linea.sum().reindex(['Casa 1','Casa 2','Casa 3']).fillna(0);c1,c2,c3=costs.tolist();d12=(c2/c1-1)*100 if c1 else np.nan;d23=(c3/c2-1)*100 if c2 else np.nan
-    st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Costo acumulado</div><div class='value'>{money(costs.sum())}</div><div class='sub'>Tres ciclos</div></div><div class='kpi'><div class='label'>Costo medio por ciclo</div><div class='value'>{money(costs.mean())}</div></div><div class='kpi'><div class='label'>Proveedores</div><div class='value'>{inh.Proveedor.nunique()}</div></div><div class='kpi'><div class='label'>Flete identificado</div><div class='value'>{money(freight.Total_linea.sum())}</div><div class='sub'>{len(freight)} cargos útiles</div></div></div>",unsafe_allow_html=True)
-    def dc(x):return 'delta-up' if x>0 else ('delta-down' if x<0 else 'delta-flat')
-    def dt(x):return ('▲ ' if x>0 else '▼ ' if x<0 else '● ')+f'{abs(x):.1f}% vs anterior'
-    st.markdown(f"<div class='house-row'><div class='house-card'><div class='house-icon'>🏠</div><div class='house-name'>Casa 1</div><div class='house-cost'>{money(c1)}</div><div class='delta-flat'>Base</div></div><div class='house-card'><div class='house-icon'>🏡</div><div class='house-name'>Casa 2</div><div class='house-cost'>{money(c2)}</div><div class='{dc(d12)}'>{dt(d12)}</div></div><div class='house-card'><div class='house-icon'>🏘️</div><div class='house-name'>Casa 3</div><div class='house-cost'>{money(c3)}</div><div class='{dc(d23)}'>{dt(d23)}</div></div></div>",unsafe_allow_html=True)
-    view=st.selectbox('Visualización del costo por casa',['Trayectoria conectada','Burbujas comparativas','Waterfall acumulativo'])
-    if view=='Trayectoria conectada':fig=go.Figure(go.Scatter(x=costs.index,y=costs.values,mode='lines+markers+text',text=[money(v) for v in costs],textposition='top center',line=dict(width=8,shape='spline'),marker=dict(size=34,symbol='hexagon')))
-    elif view=='Burbujas comparativas':fig=go.Figure(go.Scatter(x=costs.index,y=[1,1,1],mode='markers+text',text=[money(v) for v in costs],textposition='top center',marker=dict(size=np.sqrt(costs.values/costs.max())*105+35)));fig.update_yaxes(visible=False)
-    else:fig=go.Figure(go.Waterfall(x=['Casa 1','Cambio 1→2','Cambio 2→3'],measure=['absolute','relative','relative'],y=[c1,c2-c1,c3-c2],text=[money(c1),money(c2-c1),money(c3-c2)],textposition='outside'))
-    fig.update_layout(title='Tendencia del costo de operación por casa',height=430,template='streamlit',showlegend=False);st.plotly_chart(fig,use_container_width=True);chart_explain('Observe dirección y magnitud del cambio entre casas.','Saber si la nueva casa está costando más o menos y cuánto.')
-    comp=st.segmented_control('Comparación de drivers',['Casa 1 → Casa 2','Casa 2 → Casa 3'],default='Casa 2 → Casa 3');a,b=(inh[inh.Casa.eq('Casa 1')],inh[inh.Casa.eq('Casa 2')]) if comp.startswith('Casa 1') else (inh[inh.Casa.eq('Casa 2')],inh[inh.Casa.eq('Casa 3')]);drv=drivers(a,b).head(18).reset_index();dv=st.selectbox('Visualización de drivers',['Waterfall de impacto','Treemap de variación','Burbujas de impacto'])
-    if dv=='Waterfall de impacto':q=drv.head(12);fig=go.Figure(go.Waterfall(x=q.Material_homologado,measure=['relative']*len(q),y=q.Delta,text=[money(v) for v in q.Delta],textposition='outside'))
-    elif dv=='Treemap de variación':q=drv.copy();q['Dirección']=np.where(q.Delta>=0,'Aumenta costo','Reduce costo');fig=px.treemap(q,path=['Dirección','Material_homologado'],values='AbsDelta',color='Delta',color_continuous_scale='RdYlGn_r')
-    else:q=drv.copy();fig=px.scatter(q,x='Delta',y='AbsDelta',size='AbsDelta',hover_name='Material_homologado',color=np.where(q.Delta>=0,'Aumenta','Ahorra'))
-    fig.update_layout(title=f'Drivers · {comp}',height=520,template='streamlit');st.plotly_chart(fig,use_container_width=True);chart_explain('Mayor tamaño o desplazamiento = mayor efecto en la diferencia. Positivo aumenta costo; negativo reduce.','Priorizar materiales donde realmente se explica la variación.')
-    st.markdown("<div class='sourcebox'><b>Superbloque:</b> permanece separado del block convencional porque sus facturas pueden incluir un sistema constructivo con acero y otros componentes.</div>",unsafe_allow_html=True)
+tax=tax_pct/100; waste=waste_pct/100; n_future=2 if future=='Casas 5 + 6' else 1
+df=add_fiscal(df0,tax)
+value_col='Total_con_impuesto' if price_view=='Costo final con impuesto' else 'Subtotal_sin_impuesto'
+unit_price_col='Precio_con_impuesto' if price_view=='Costo final con impuesto' else 'Precio_sin_impuesto'
+df['Valor_analisis']=df[value_col]
+recipe=recipe_base(df,value_col)
+recipe['Etapa']=recipe.Familia.map(stage_for_family)
+trend=recipe_cost_trend(df,recipe,unit_price_col)
+freight=df[df.Es_flete & df.Valor_analisis.gt(1)].copy()
+services=df[df.Tipo_registro.isin(['Servicio','Material/servicio']) & ~df.Es_flete].copy()
 
-with ti['🧱 Receta visual']:
-    rec=recipe_base(hdf);st.subheader('🧱 Receta de una casa ~100 m² / 2 plantas');rv=st.selectbox('Visualización de la receta',['Sunburst por familia','Treemap de costo','Mapa cantidad × costo'])
-    if rv=='Mapa cantidad × costo':q=rec.head(35).copy();q['Peso']=np.log1p(q.Cantidad_base.clip(lower=0))*np.log1p(q.Costo_hist.clip(lower=0));fig=px.scatter(q,x='Cantidad_base',y='Costo_hist',size='Peso',color='Familia',hover_name='Material_homologado',hover_data=['Presentacion','Metodo'])
-    else:q=rec.groupby(['Familia','Material_homologado'],as_index=False).agg(Costo=('Costo_hist','sum'));fig=px.sunburst(q,path=['Familia','Material_homologado'],values='Costo') if rv.startswith('Sunburst') else px.treemap(q,path=['Familia','Material_homologado'],values='Costo')
-    fig.update_layout(height=550,template='streamlit');st.plotly_chart(fig,use_container_width=True);chart_explain('Una zona/burbuja mayor indica más impacto económico o cantidad.','Identificar materiales que requieren mayor control y planificación.')
-    st.markdown('### 🗓️ Ruta de abastecimiento');scale=st.segmented_control('Escala',['Semanas','Meses'],default='Semanas')
-    for name,a,b,mats in STAGE_PLAN:
-        if scale=='Meses':a,b=(a-1)//4+1,(b-1)//4+1
-        chips=''.join(f"<span class='chip'>{m}</span>" for m in mats);st.markdown(f"<div class='material-card'><div class='title'>{name}</div><div class='meta'>{'Semana' if scale=='Semanas' else 'Mes'} {a} → {b}</div><div style='margin-top:8px'>{chips}</div></div>",unsafe_allow_html=True)
+st.markdown("<div class='hero'><div class='eyebrow'>Inteligencia de construcción · V6</div><h1>Construir Mejor</h1><p><b>La receta, el costo y la oportunidad detrás de cada casa.</b><br>Lo aprendido en cuatro viviendas se convierte en una forma más inteligente de comprar y construir las próximas dos.</p></div>",unsafe_allow_html=True)
 
-with ti['🏪 Material × proveedor']:
-    st.subheader('🏪 Comparación material × proveedor');st.caption('Solo MIN, MAX y TOTAL GASTADO. Sin promedio ni mediana.')
-    valid=scope[scope.Precio_unitario>0].copy();order=(valid.groupby('Material_homologado').agg(Cantidad=('Cantidad','sum'),Relevancia=('Relevancia','min'),Gasto=('Total_linea','sum')).sort_values(['Relevancia','Cantidad','Gasto'],ascending=[True,False,False]).index.tolist());mat=st.selectbox('Material',order);comps=valid.loc[valid.Material_homologado.eq(mat),'Comparable'].value_counts().index.tolist();ck=st.selectbox('Producto/presentación comparable',comps);x=valid[(valid.Material_homologado.eq(mat))&(valid.Comparable.eq(ck))].copy();usekg=x.Precio_por_kg.notna().any();mode=st.segmented_control('Comparar por',['Precio por kg','Precio por presentación'],default='Precio por kg') if usekg else 'Precio por presentación';metric='Precio_por_kg' if mode=='Precio por kg' else 'Precio_unitario';x=x[x[metric].notna()];ss=supplier_stats(x,metric).sort_values('Precio_min');vv=st.selectbox('Visualización',['Dumbbell MIN ↔ MAX','Burbujas: rango y gasto','Heatmap MIN/MAX'])
-    if ss.empty:st.info('No hay datos comparables.')
-    else:
-        if vv.startswith('Dumbbell'):
+st.markdown("""
+<div class='story-flow'>
+  <div class='story-step'><div class='n'>Punto de partida</div><div class='big'>4 casas</div><div class='small'>2.392 líneas históricas que capturan cómo se ha comprado y construido.</div></div>
+  <div class='story-step'><div class='n'>Aprendizaje</div><div class='big'>1 receta</div><div class='small'>Cantidades por vivienda, con estructurales confirmados y resto consolidado ÷ 4.</div></div>
+  <div class='story-step'><div class='n'>Evolución</div><div class='big'>↓ Costo</div><div class='small'>La misma receta se revaloriza a precios históricos para medir si realmente estamos construyendo más barato.</div></div>
+  <div class='story-step'><div class='n'>Siguiente decisión</div><div class='big'>Casas 5 + 6</div><div class='small'>Cuánto comprar, dónde cotizar, qué precio negociar y qué materiales priorizar.</div></div>
+</div>
+""", unsafe_allow_html=True)
+
+recipe_cost=recipe[~recipe.Confianza_receta.eq('Revisar sistema')].Costo_por_casa.sum()
+label_tax='impuesto estimado incluido' if price_view=='Costo final con impuesto' else 'sin impuesto'
+st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Costo receta / casa</div><div class='value'>{money(recipe_cost)}</div><div class='sub'>{label_tax}</div></div><div class='kpi'><div class='label'>Grupos de receta</div><div class='value'>{len(recipe):,}</div><div class='sub'>material + presentación</div></div><div class='kpi'><div class='label'>Base histórica</div><div class='value'>4 casas</div><div class='sub'>viviendas esencialmente iguales</div></div><div class='kpi'><div class='label'>Regla 23/03</div><div class='value'>{recipe.Confianza_receta.eq('Confirmado').sum()}</div><div class='sub'>grupos confirmados</div></div></div>",unsafe_allow_html=True)
+
+tab_names=['🎬 Historia','🏠 Receta','📉 Tendencia de costos','🧩 Anatomía','🏪 Proveedores','📈 Precios']
+if len(freight): tab_names.append('🚚 Fletes')
+tab_names += ['🎯 Casas 5 y 6','🔎 Base maestra']
+tabs=st.tabs(tab_names); T=dict(zip(tab_names,tabs))
+
+# ---------------- HISTORIA / PORTADA EJECUTIVA ----------------
+with T['🎬 Historia']:
+    st.subheader('🎬 De histórico a decisión')
+    st.markdown("<div class='story-callout'><div class='headline'>Cuatro casas nos enseñaron qué comprar, cuánto cuesta y dónde está la próxima oportunidad de ahorro.</div>La historia no termina en el gasto histórico: termina en una receta repetible y en mejores decisiones para Casas 5 y 6.</div>",unsafe_allow_html=True)
+
+    story_recipe=recipe[~recipe.Confianza_receta.eq('Revisar sistema')].copy()
+    story_cost=story_recipe.Costo_por_casa.sum()
+    rt_story=trend[trend.Cobertura_pct>=70].copy()
+    story_change=np.nan
+    if len(rt_story)>=2 and rt_story.iloc[0].Costo_receta:
+        story_change=(rt_story.iloc[-1].Costo_receta/rt_story.iloc[0].Costo_receta-1)*100
+
+    story_plan=plan_future(df,recipe,value_col,price_view,2,waste)
+    story_saving=story_plan.Ahorro_potencial.sum() if len(story_plan) else np.nan
+
+    st.markdown(
+        f"<div class='kpi-grid'>"
+        f"<div class='kpi'><div class='label'>Receta estándar</div><div class='value'>{money(story_cost)}</div><div class='sub'>costo equivalente por casa · {label_tax}</div></div>"
+        f"<div class='kpi'><div class='label'>Evolución comparable</div><div class='value'>{pct(story_change)}</div><div class='sub'>misma receta · precios históricos</div></div>"
+        f"<div class='kpi'><div class='label'>Base de aprendizaje</div><div class='value'>4 casas</div><div class='sub'>2.392 líneas homologadas</div></div>"
+        f"<div class='kpi'><div class='label'>Oportunidad Casas 5+6</div><div class='value'>{money(story_saving)}</div><div class='sub'>vs precio meta de compra</div></div>"
+        f"</div>", unsafe_allow_html=True
+    )
+
+    sv=st.selectbox(
+        'Visualización principal de la historia',
+        ['Trayectoria de costo','Waterfall de aprendizaje','Índice base 100','Composición de la receta','Ruta 4 casas → Casas 5+6']
+    )
+
+    if sv=='Trayectoria de costo':
+        if len(rt_story)>=2:
+            fig=px.line(rt_story,x='Mes',y='Costo_receta',markers=True)
+            fig.update_traces(line=dict(width=5),marker=dict(size=9))
+            fig.update_layout(title='¿Cuánto cuesta construir hoy la misma receta?',yaxis_title='Costo equivalente por casa')
+        else:
             fig=go.Figure()
-            for _,r in ss.iterrows():fig.add_trace(go.Scatter(x=[r.Precio_min,r.Precio_max],y=[r.Proveedor,r.Proveedor],mode='lines',line=dict(width=9),showlegend=False,hoverinfo='skip'))
-            fig.add_trace(go.Scatter(x=ss.Precio_min,y=ss.Proveedor,mode='markers',marker=dict(size=15,symbol='circle'),name='Mínimo'));fig.add_trace(go.Scatter(x=ss.Precio_max,y=ss.Proveedor,mode='markers',marker=dict(size=15,symbol='diamond'),name='Máximo'))
-        elif vv.startswith('Burbujas'):ss['Rango']=ss.Precio_max-ss.Precio_min;fig=px.scatter(ss,x='Precio_min',y='Precio_max',size='Total_gastado',hover_name='Proveedor',hover_data=['Total_gastado','Rango'])
-        else:fig=px.imshow(ss.set_index('Proveedor')[['Precio_min','Precio_max']],aspect='auto',text_auto='.0f')
-        fig.update_layout(title=f'{mat} · {ck}',height=max(420,120+55*len(ss)),template='streamlit');st.plotly_chart(fig,use_container_width=True);chart_explain('Compare el mejor y peor precio pagado por proveedor; el gasto total da contexto al peso del proveedor.','Definir rango de negociación sin depender de promedios.')
-
-with ti['📈 Evolución de precio']:
-    st.subheader('📈 Evolución histórica del precio');st.caption('La unidad comercial se valida primero. Clavos EPA se tratan como paquete/bolsa, no como pieza.')
-    mats=(scope[scope.Precio_unitario>0].groupby('Material_homologado').Cantidad.sum().sort_values(ascending=False).index.tolist());mat=st.selectbox('Material',mats,key='tm');comps=scope.loc[(scope.Material_homologado.eq(mat))&(scope.Precio_unitario>0),'Comparable'].value_counts().index.tolist();ck=st.selectbox('Producto/presentación comparable',comps,key='tc');x=scope[(scope.Material_homologado.eq(mat))&(scope.Comparable.eq(ck))&(scope.Precio_unitario>0)&scope.Fecha.notna()].copy();usekg=x.Precio_por_kg.notna().any();mode=st.segmented_control('Métrica',['₡ por kg','₡ por presentación'],default='₡ por kg') if usekg else '₡ por presentación';metric='Precio_por_kg' if mode=='₡ por kg' else 'Precio_unitario';x=x[x[metric].notna()].sort_values('Fecha');tv=st.selectbox('Visualización',['Línea temporal por proveedor','Small multiples','Puntos + rango histórico'])
-    if tv=='Small multiples':fig=px.line(x,x='Fecha',y=metric,facet_row='Proveedor',markers=True,height=max(430,220*x.Proveedor.nunique()))
-    elif tv.startswith('Puntos'):fig=px.scatter(x,x='Fecha',y=metric,color='Proveedor',size=np.maximum(x.Cantidad.fillna(1),1),hover_data=['Descripcion_original','Unidad_comercial'])
-    else:fig=px.line(x,x='Fecha',y=metric,color='Proveedor',markers=True)
-    fig.update_layout(title=f'Pulso de precio · {ck}',height=540,template='streamlit');st.plotly_chart(fig,use_container_width=True);chart_explain('Cada punto es una compra comparable. La pendiente revela si el precio sube, baja o se mantiene.','Decidir si comprar pronto, negociar o esperar una nueva cotización.')
-    ss=supplier_stats(x,metric).sort_values('Ultimo_precio');cols=st.columns(min(3,max(1,len(ss))))
-    for i,(_,r) in enumerate(ss.iterrows()):
-        icon='📈' if r.Tendencia=='Subiendo' else ('📉' if r.Tendencia=='Bajando' else '➖')
-        with cols[i%len(cols)]:st.markdown(f"<div class='rec-card'><div class='rank'>{r.Proveedor}</div><div class='supplier'>{money(r.Ultimo_precio)}</div><div class='signal'>{icon} {r.Tendencia} · {pct(r.Cambio_pct)}</div><div class='meta'>MIN {money(r.Precio_min)} · MAX {money(r.Precio_max)}</div></div>",unsafe_allow_html=True)
-
-if '🚚 Fletes' in ti:
-    with ti['🚚 Fletes']:
-        st.subheader('🚚 Flete y costo puesto en obra');fh=freight[freight.Casa.isin(['Casa 1','Casa 2','Casa 3'])].copy();st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Flete identificado</div><div class='value'>{money(freight.Total_linea.sum())}</div></div><div class='kpi'><div class='label'>Líneas</div><div class='value'>{len(freight)}</div></div><div class='kpi'><div class='label'>Proveedores</div><div class='value'>{freight.Proveedor.nunique()}</div></div><div class='kpi'><div class='label'>Peso sobre gasto</div><div class='value'>{freight.Total_linea.sum()/scope.Total_linea.sum()*100:.1f}%</div></div></div>",unsafe_allow_html=True);fv=st.selectbox('Visualización',['Sunburst casa → proveedor','Treemap por proveedor','Burbujas por cargo'])
-        if fv.startswith('Sunburst'):fig=px.sunburst(fh,path=['Casa','Proveedor'],values='Total_linea')
-        elif fv.startswith('Treemap'):fig=px.treemap(freight,path=['Proveedor','Descripcion_original'],values='Total_linea')
-        else:fig=px.scatter(freight,x='Fecha',y='Total_linea',size='Total_linea',color='Proveedor',hover_name='Descripcion_original')
-        fig.update_layout(height=520,template='streamlit');st.plotly_chart(fig,use_container_width=True);chart_explain('El tamaño representa cuánto se pagó en transporte.','Comparar costo puesto en obra y oportunidades de consolidación.')
-
-with ti['🎯 Casas 4 y 5']:
-    st.subheader(f'🎯 Centro de planificación · {future_houses}');st.caption('Cuánto comprar, cuándo, dónde cotizar y qué significa la evolución del precio.');rec=recipe_base(hdf);rec['Cantidad_meta']=rec.Cantidad_base*(1+waste)*n_future;cand=rec.sort_values(['Relevancia','Costo_hist'],ascending=[True,False]).head(35);rows=[]
-    for _,r in cand.iterrows():
-        x=scope[(scope.Material_homologado.eq(r.Material_homologado))&(scope.Presentacion.eq(r.Presentacion))&(scope.Precio_unitario>0)].copy()
-        if x.empty:continue
-        metric='Precio_por_kg' if x.Precio_por_kg.notna().any() else 'Precio_unitario';x=x[x[metric].notna()];ss=supplier_stats(x,metric)
-        if ss.empty:continue
-        pmin,pmax=ss.Ultimo_precio.min(),ss.Ultimo_precio.max();span=max(pmax-pmin,1);ss['score']=.58*((ss.Ultimo_precio-pmin)/span)+.27*(ss.Cambio_pct.clip(-30,30)/60+.5)-.15*(np.minimum(ss.Compras,5)/5);ss=ss.sort_values('score');f=ss.iloc[0];s=ss.iloc[1] if len(ss)>1 else None;target=ss.Precio_min.min();action,interpret=signal_text(f.Tendencia,f.Ultimo_precio,target);rows.append({**r.to_dict(),'Proveedor_1':f.Proveedor,'Ultimo_1':f.Ultimo_precio,'Tendencia_1':f.Tendencia,'Cambio_1':f.Cambio_pct,'Proveedor_2':s.Proveedor if s is not None else '—','Ultimo_2':s.Ultimo_precio if s is not None else np.nan,'Precio_meta':target,'Metrica':'₡/kg' if metric=='Precio_por_kg' else '₡/presentación','Accion':action,'Interpretacion':interpret})
-    plan=pd.DataFrame(rows);build_animation(n_future)
-    if plan.empty:st.info('No hay suficientes datos para construir recomendaciones.')
+            fig.add_annotation(text='Cobertura histórica insuficiente',showarrow=False)
+    elif sv=='Waterfall de aprendizaje':
+        if len(rt_story)>=2:
+            first=float(rt_story.iloc[0].Costo_receta); last=float(rt_story.iloc[-1].Costo_receta)
+            delta=last-first
+            fig=go.Figure(go.Waterfall(
+                x=['Inicio comparable','Cambio acumulado','Último comparable'],
+                measure=['absolute','relative','total'],
+                y=[first,delta,last],
+                text=[money(first),money(delta),money(last)],
+                textposition='outside'
+            ))
+            fig.update_layout(title='Del costo de referencia al costo comparable más reciente',yaxis_title='Costo por casa')
+        else:
+            fig=go.Figure(); fig.add_annotation(text='Cobertura histórica insuficiente',showarrow=False)
+    elif sv=='Índice base 100':
+        if len(rt_story)>=2:
+            fig=px.line(rt_story,x='Mes',y='Indice',markers=True)
+            fig.add_hline(y=100,line_dash='dot')
+            fig.update_layout(title='Índice del costo de construir la misma casa',yaxis_title='Índice base 100')
+        else:
+            fig=go.Figure(); fig.add_annotation(text='Cobertura histórica insuficiente',showarrow=False)
+    elif sv=='Composición de la receta':
+        z=story_recipe.groupby('Familia',as_index=False).Costo_por_casa.sum().sort_values('Costo_por_casa',ascending=False)
+        fig=px.treemap(z,path=['Familia'],values='Costo_por_casa')
+        fig.update_layout(title='¿Dónde se concentra el costo de una casa?')
     else:
-        risky=(plan.Tendencia_1=='Subiendo').sum();st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Materiales priorizados</div><div class='value'>{len(plan)}</div></div><div class='kpi'><div class='label'>Tendencia al alza</div><div class='value'>{risky}</div><div class='sub'>Negociar primero</div></div><div class='kpi'><div class='label'>Margen</div><div class='value'>{waste*100:.0f}%</div></div><div class='kpi'><div class='label'>Casas</div><div class='value'>{n_future}</div></div></div>",unsafe_allow_html=True);material=st.selectbox('Explorar material',plan.Material_homologado.tolist());r=plan[plan.Material_homologado.eq(material)].iloc[0];icon='📈' if r.Tendencia_1=='Subiendo' else ('📉' if r.Tendencia_1=='Bajando' else '➖');c1,c2,c3=st.columns(3)
-        with c1:st.markdown(f"<div class='rec-card'><div class='rank'>Cantidad objetivo</div><div class='supplier'>{r.Cantidad_meta:,.1f}</div><div class='meta'>{r.Presentacion} · incluye {waste*100:.0f}% seguridad</div></div>",unsafe_allow_html=True)
-        with c2:st.markdown(f"<div class='rec-card'><div class='rank'>🥇 Primera opción</div><div class='supplier'>{r.Proveedor_1}</div><div class='signal'>{icon} {r.Tendencia_1} · {pct(r.Cambio_1)}</div><div class='meta'>Último {money(r.Ultimo_1)} · {r.Metrica}</div></div>",unsafe_allow_html=True)
-        with c3:st.markdown(f"<div class='rec-card'><div class='rank'>🎯 Meta</div><div class='supplier'>{money(r.Precio_meta)}</div><div class='meta'>{r.Metrica} · mínimo comparable</div></div>",unsafe_allow_html=True)
-        st.markdown(f"<div class='explain'><b>{r.Accion}</b><br>{r.Interpretacion}<br><b>Alternativa:</b> {r.Proveedor_2} · último {money(r.Ultimo_2)}.</div>",unsafe_allow_html=True);pv=st.selectbox('Visualización del plan',['Radar de negociación','Sankey material → proveedor','Mapa de urgencia'])
-        if pv=='Radar de negociación':q=plan.copy();q['Brecha']=q.Ultimo_1-q.Precio_meta;fig=px.scatter(q,x='Cantidad_meta',y='Brecha',size='Costo_hist',color='Tendencia_1',hover_name='Material_homologado',hover_data=['Proveedor_1','Presentacion','Metrica'])
-        elif pv.startswith('Sankey'):
-            q=plan.head(18);mats=q.Material_homologado.tolist();provs=list(dict.fromkeys(q.Proveedor_1.tolist()));labs=mats+provs;src=[];tgt=[];val=[]
-            for _,z in q.iterrows():src.append(labs.index(z.Material_homologado));tgt.append(labs.index(z.Proveedor_1));val.append(max(float(z.Costo_hist),1))
-            fig=go.Figure(go.Sankey(node=dict(label=labs,pad=12,thickness=16),link=dict(source=src,target=tgt,value=val)))
-        else:q=plan.copy();q['Urgencia']=np.where(q.Tendencia_1.eq('Subiendo'),3,np.where(q.Tendencia_1.eq('Estable'),2,1));fig=px.scatter(q,x='Urgencia',y='Cantidad_meta',size='Costo_hist',color='Tendencia_1',hover_name='Material_homologado',hover_data=['Proveedor_1','Precio_meta'])
-        fig.update_layout(height=560,template='streamlit',title='Plan de compra priorizado');st.plotly_chart(fig,use_container_width=True);chart_explain('Tamaño = impacto económico; tendencia, brecha y volumen indican riesgo u oportunidad.','Ordenar cotizaciones y negociaciones por prioridad real.');st.download_button('⬇️ Descargar plan',plan.to_csv(index=False).encode('utf-8-sig'),'plan_compras_casas_4_5_v5.csv','text/csv')
+        labels=['4 casas históricas','Receta estándar','Costo comparable','Oportunidades de compra','Casas 5 + 6']
+        fig=go.Figure(go.Sankey(
+            node=dict(label=labels,pad=18,thickness=20),
+            link=dict(source=[0,1,2,3],target=[1,2,3,4],value=[4,4,4,4])
+        ))
+        fig.update_layout(title='Del histórico a la decisión futura')
 
-with ti['🔎 Explorador maestro']:
-    st.subheader('🔎 Explorador maestro');c1,c2,c3,c4=st.columns(4);c1.metric('Líneas',f'{len(df):,}');c2.metric('Materiales',df.Material_homologado.nunique());c3.metric('Proveedores',df.Proveedor.nunique());c4.metric('Pendientes manuales','0');search=st.text_input('🔍 Buscar');a,b,c=st.columns(3)
-    with a:fam=st.multiselect('Familia',sorted(df.Familia.dropna().unique()))
-    with b:prov=st.multiselect('Proveedor',sorted(df.Proveedor.dropna().unique()))
-    with c:typ=st.multiselect('Tipo',sorted(df.Tipo_registro.dropna().unique()))
+    fig.update_layout(height=520)
+    st.plotly_chart(fig,use_container_width=True)
+    explain(
+        'La portada conecta el aprendizaje histórico con una receta estable, la evolución del costo de esa misma receta y el plan de compra futuro.',
+        'Entender en segundos si estamos construyendo mejor, qué explica el resultado y dónde concentrar la siguiente decisión.'
+    )
+
+    st.markdown("### 🧭 La historia en cuatro preguntas")
+    c1,c2,c3,c4=st.columns(4)
+    with c1:
+        st.markdown("<div class='card'><div class='title'>1. ¿Qué necesita una casa?</div><div class='meta'>La pestaña Receta convierte el consolidado histórico en cantidades por vivienda.</div></div>",unsafe_allow_html=True)
+    with c2:
+        st.markdown("<div class='card'><div class='title'>2. ¿Estamos bajando el costo?</div><div class='meta'>Tendencia revaloriza la misma receta con precios históricos comparables.</div></div>",unsafe_allow_html=True)
+    with c3:
+        st.markdown("<div class='card'><div class='title'>3. ¿Qué lo explica?</div><div class='meta'>Proveedores y Precios muestran MIN, MAX, gasto y comportamiento de compra.</div></div>",unsafe_allow_html=True)
+    with c4:
+        st.markdown("<div class='card'><div class='title'>4. ¿Qué hacemos después?</div><div class='meta'>Casas 5 y 6 transforma el aprendizaje en cantidades, proveedor y precio meta.</div></div>",unsafe_allow_html=True)
+
+# ---------------- RECETA ----------------
+with T['🏠 Receta']:
+    st.subheader('🏠 Receta estándar de una vivienda')
+    st.markdown("<div class='sourcebox'><b>Metodología:</b> cantidades y costos del resto de materiales = total histórico de 4 casas ÷ 4. Block, arena, cemento, piedra y varilla usan directamente la última casa confirmada por la regla posterior al 23/03/2026.</div>",unsafe_allow_html=True)
+    conf=st.multiselect('Nivel de receta',['Confirmado','Estimado','Revisar sistema'],default=['Confirmado','Estimado'])
+    families=st.multiselect('Filtrar familias',sorted(recipe.Familia.unique()))
+    q=recipe[recipe.Confianza_receta.isin(conf)].copy()
+    if families: q=q[q.Familia.isin(families)]
+    rv=st.selectbox('Visualización de la receta',['Treemap familia → material','Sunburst familia → material','Icicle familia → material','Pareto de costo','Barras horizontales por familia'])
+    if rv.startswith('Treemap'):
+        fig=px.treemap(q,path=['Familia','Material_homologado'],values='Costo_por_casa',hover_data=['Cantidad_por_casa','Presentacion','Confianza_receta','Metodo'])
+    elif rv.startswith('Sunburst'):
+        fig=px.sunburst(q,path=['Familia','Material_homologado'],values='Costo_por_casa',hover_data=['Cantidad_por_casa','Presentacion','Confianza_receta'])
+    elif rv.startswith('Icicle'):
+        fig=px.icicle(q,path=['Familia','Material_homologado'],values='Costo_por_casa',hover_data=['Cantidad_por_casa','Presentacion','Confianza_receta'])
+    elif rv.startswith('Pareto'):
+        z=q.groupby('Material_homologado',as_index=False).Costo_por_casa.sum().sort_values('Costo_por_casa',ascending=False).head(30)
+        z['Acum_pct']=z.Costo_por_casa.cumsum()/max(z.Costo_por_casa.sum(),1)*100
+        fig=go.Figure([go.Bar(x=z.Material_homologado,y=z.Costo_por_casa,name='Costo'),go.Scatter(x=z.Material_homologado,y=z.Acum_pct,name='% acumulado',yaxis='y2',mode='lines+markers')])
+        fig.update_layout(yaxis2=dict(overlaying='y',side='right',range=[0,105],title='% acumulado'))
+    else:
+        z=q.groupby('Familia',as_index=False).Costo_por_casa.sum().sort_values('Costo_por_casa')
+        fig=px.bar(z,x='Costo_por_casa',y='Familia',orientation='h',text_auto='.2s')
+    fig.update_layout(height=570,title='Composición de la receta por casa')
+    st.plotly_chart(fig,use_container_width=True)
+    explain('El costo y la cantidad corresponden a una sola vivienda; la presentación se mantiene separada para no mezclar unidades comerciales.','Validar qué materiales forman la casa y concentrar revisión/negociación en los componentes de mayor peso.')
+    st.markdown('### ✅ Estructurales confirmados')
+    core=recipe[recipe.Confianza_receta.eq('Confirmado')][['Material_homologado','Presentacion','Unidad_comercial','Variante_comparable','Cantidad_por_casa','Costo_por_casa','Metodo']]
+    st.dataframe(core.sort_values('Material_homologado'),use_container_width=True,hide_index=True)
+    st.markdown('### 🔎 Receta auditable')
+    cols=['Material_homologado','Familia','Presentacion','Unidad_comercial','Variante_comparable','Cantidad_total_4_casas','Cantidad_por_casa','Costo_total_4_casas','Costo_por_casa','Confianza_receta','Metodo','Lineas_fuente']
+    st.dataframe(q[cols].sort_values(['Confianza_receta','Costo_por_casa'],ascending=[True,False]),use_container_width=True,hide_index=True,height=480)
+    st.download_button('⬇️ Descargar receta por casa',recipe[cols].to_csv(index=False).encode('utf-8-sig'),'receta_estandar_por_casa_v6.csv','text/csv')
+
+# ---------------- TENDENCIA ----------------
+with T['📉 Tendencia de costos']:
+    st.subheader('📉 ¿Está bajando el costo de construir la misma casa?')
+    rt=trend[trend.Cobertura_pct>=70].copy()
+    if len(rt)>=2:
+        first,last=rt.iloc[0],rt.iloc[-1]; change=(last.Costo_receta/first.Costo_receta-1)*100 if first.Costo_receta else np.nan
+        mid=rt.iloc[len(rt)//2]
+        st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Inicio comparable</div><div class='value'>{money(first.Costo_receta)}</div><div class='sub'>{first.Mes.strftime('%m/%Y')}</div></div><div class='kpi'><div class='label'>Punto medio</div><div class='value'>{money(mid.Costo_receta)}</div><div class='sub'>{mid.Mes.strftime('%m/%Y')}</div></div><div class='kpi'><div class='label'>Último comparable</div><div class='value'>{money(last.Costo_receta)}</div><div class='sub'>{last.Mes.strftime('%m/%Y')}</div></div><div class='kpi'><div class='label'>Cambio acumulado</div><div class='value'>{pct(change)}</div><div class='sub'>misma receta, precios distintos</div></div></div>",unsafe_allow_html=True)
+        tv=st.selectbox('Visualización de la tendencia',['Trayectoria conectada','Área de evolución','Índice base 100','Waterfall de cambios','Hitos históricos'])
+        if tv=='Trayectoria conectada':
+            fig=px.line(rt,x='Mes',y='Costo_receta',markers=True); fig.update_traces(line=dict(width=5),marker=dict(size=10))
+        elif tv=='Área de evolución':
+            fig=px.area(rt,x='Mes',y='Costo_receta',markers=True)
+        elif tv=='Índice base 100':
+            fig=px.line(rt,x='Mes',y='Indice',markers=True); fig.add_hline(y=100,line_dash='dot'); fig.update_yaxes(title='Índice de costo')
+        elif tv=='Waterfall de cambios':
+            z=rt.copy(); vals=[z.iloc[0].Costo_receta]+z.Costo_receta.diff().iloc[1:].tolist(); measures=['absolute']+['relative']*(len(vals)-1)
+            fig=go.Figure(go.Waterfall(x=z.Mes.dt.strftime('%m/%Y'),y=vals,measure=measures,connector={'line':{'width':1}})); fig.update_yaxes(title='Cambio en costo')
+        else:
+            idx=np.unique(np.linspace(0,len(rt)-1,min(5,len(rt)),dtype=int)); z=rt.iloc[idx]
+            fig=px.bar(z,x=z.Mes.dt.strftime('%m/%Y'),y='Costo_receta',text_auto='.3s'); fig.update_xaxes(title='Hitos comparables')
+        fig.update_layout(height=530,title='Costo equivalente de una receta fija a precios históricos')
+        st.plotly_chart(fig,use_container_width=True)
+        explain('Las cantidades de una casa permanecen fijas. Solo cambian los precios históricos; por eso la pendiente representa inflación/ahorro real de compra sobre la misma canasta.','Comprobar si el costo de una vivienda comparable está disminuyendo y cuantificar la mejora sin inventar una asignación de facturas a Casa 1–4.')
+        st.caption(f"Cobertura del último período: {last.Cobertura_pct:.0f}% de la canasta de referencia. Se ocultan meses con cobertura menor al 70%.")
+    else:
+        st.warning('No hay suficientes meses con cobertura comparable para construir la tendencia de costo.')
+
+# ---------------- ANATOMIA ----------------
+with T['🧩 Anatomía']:
+    st.subheader('🧩 Anatomía física y validación de la receta')
+    st.markdown("<div class='sourcebox'><b>Referencia física por casa:</b> 2 habitaciones · 1 baño completo · 1 medio baño · 2 inodoros · 2 lavamanos · 1 ducha · 3 muebles de melamina · 3 ventanas superiores · 1 puerta principal · 1 puerta de servicio/baño · 1 puerta de patio de 3 paneles · 1 cubierta frontal de policarbonato.</div>",unsafe_allow_html=True)
+    comp=recipe[~recipe.Confianza_receta.eq('Revisar sistema')].groupby('Componente_fisico',as_index=False).agg(Costo=('Costo_por_casa','sum'),Materiales=('Material_homologado','nunique'),Cantidad=('Cantidad_por_casa','sum'))
+    av=st.selectbox('Visualización de componentes',['Treemap de componentes','Sunburst componente → familia','Icicle componente → familia','Barras de costo por componente','Pareto de componentes'])
+    if av=='Treemap de componentes': fig=px.treemap(comp,path=['Componente_fisico'],values='Costo',hover_data=['Materiales'])
+    elif av.startswith('Sunburst'):
+        z=recipe.groupby(['Componente_fisico','Familia'],as_index=False).Costo_por_casa.sum(); fig=px.sunburst(z,path=['Componente_fisico','Familia'],values='Costo_por_casa')
+    elif av.startswith('Icicle'):
+        z=recipe.groupby(['Componente_fisico','Familia'],as_index=False).Costo_por_casa.sum(); fig=px.icicle(z,path=['Componente_fisico','Familia'],values='Costo_por_casa')
+    elif av.startswith('Barras'):
+        z=comp.sort_values('Costo'); fig=px.bar(z,x='Costo',y='Componente_fisico',orientation='h',text_auto='.2s')
+    else:
+        z=comp.sort_values('Costo',ascending=False); z['Acum']=z.Costo.cumsum()/max(z.Costo.sum(),1)*100
+        fig=go.Figure([go.Bar(x=z.Componente_fisico,y=z.Costo),go.Scatter(x=z.Componente_fisico,y=z.Acum,yaxis='y2',mode='lines+markers')]); fig.update_layout(yaxis2=dict(overlaying='y',side='right',range=[0,105]))
+    fig.update_layout(height=540,title='Costo de receta por componente físico')
+    st.plotly_chart(fig,use_container_width=True)
+    explain('Agrupa la receta por función física dentro de la vivienda, no solamente por proveedor o familia contable.','Detectar componentes faltantes o desproporcionados antes de utilizar la receta para Casas 5 y 6.')
+    targets=pd.DataFrame([
+        ['Habitaciones',2,'Referencia de diseño'],['Inodoros',2,'Referencia de diseño'],['Lavamanos',2,'Referencia de diseño'],['Duchas',1,'Referencia de diseño'],['Muebles de melamina',3,'2 dormitorios + cocina'],['Ventanas superiores',3,'2 dormitorios + baño'],['Puerta principal',1,'Referencia de diseño'],['Puerta servicio/medio baño',1,'Referencia de diseño'],['Puerta patio 3 paneles',1,'Referencia de diseño'],['Cubierta frontal policarbonato',1,'Referencia de diseño']
+    ],columns=['Elemento','Cantidad esperada por casa','Validación'])
+    st.dataframe(targets,use_container_width=True,hide_index=True)
+    if len(services):
+        st.caption('Servicios (por ejemplo cortes) se mantienen fuera de la cantidad física de materiales y se analizan como costo complementario, para no contaminar la receta material.')
+
+# ---------------- PROVEEDORES ----------------
+with T['🏪 Proveedores']:
+    st.subheader('🏪 Material × proveedor · MIN, MAX y total gastado')
+    mats=sorted(df[df.Tipo_registro.isin(RECIPE_TYPES)].Material_homologado.unique())
+    mat=st.selectbox('Material',mats)
+    variants=sorted(df[df.Material_homologado.eq(mat)].Variante_comparable.unique()); variant=st.selectbox('Producto / variante comparable',variants)
+    x=df[(df.Variante_comparable.eq(variant))&df.Fecha.notna()].copy(); presentation=x.Presentacion.iloc[0] if len(x) else '—'
+    metric,metric_label=price_metric_for_material(x,price_view); x=x[x[metric].gt(0)]
+    ss=supplier_stats(x,metric,value_col)
+    if ss.empty: st.info('Sin suficientes compras comparables para este material/presentación.')
+    else:
+        pv=st.selectbox('Visualización de proveedores',['Rango MIN–MAX (dumbbell)','Heatmap MIN / MAX / total','Ranking por último precio','Barras de total gastado','Bullet de negociación'])
+        if pv.startswith('Rango'):
+            z=ss.sort_values('Ultimo'); fig=go.Figure()
+            for _,r in z.iterrows(): fig.add_trace(go.Scatter(x=[r.MIN,r.MAX],y=[r.Proveedor,r.Proveedor],mode='lines+markers',showlegend=False,hovertemplate=f"{r.Proveedor}<br>MIN %{{x:,.0f}} / MAX<extra></extra>"))
+            fig.update_xaxes(title=metric_label)
+        elif pv.startswith('Heatmap'):
+            z=ss.set_index('Proveedor')[['MIN','MAX','Total_gastado']]; fig=px.imshow(z,aspect='auto',text_auto='.2s',labels=dict(color='Valor'))
+        elif pv.startswith('Ranking'):
+            z=ss.sort_values('Ultimo',ascending=False); fig=px.bar(z,x='Ultimo',y='Proveedor',orientation='h',text_auto='.3s'); fig.update_xaxes(title=metric_label)
+        elif pv.startswith('Barras'):
+            z=ss.sort_values('Total_gastado'); fig=px.bar(z,x='Total_gastado',y='Proveedor',orientation='h',text_auto='.2s')
+        else:
+            z=ss.sort_values('Ultimo'); target=float(ss.MIN.min()); fig=go.Figure()
+            for i,(_,r) in enumerate(z.iterrows()):
+                fig.add_trace(go.Indicator(mode='number+gauge',value=r.Ultimo,title={'text':r.Proveedor},domain={'row':i,'column':0},gauge={'shape':'bullet','axis':{'range':[0,max(ss.MAX.max(),1)]},'threshold':{'value':target}}))
+            fig.update_layout(grid={'rows':len(z),'columns':1,'pattern':'independent'},height=max(320,125*len(z)))
+        fig.update_layout(height=max(500,fig.layout.height or 500),title=f'{mat} · {presentation}')
+        st.plotly_chart(fig,use_container_width=True)
+        explain('MIN y MAX muestran el rango real; total gastado muestra relación histórica; último precio permite ubicar la cotización actual dentro de ese rango.','Elegir a quién cotizar y cuál es un objetivo de negociación defendible sin usar promedios que oculten extremos.')
+        st.dataframe(ss.sort_values('Ultimo'),use_container_width=True,hide_index=True)
+
+# ---------------- PRECIOS ----------------
+with T['📈 Precios']:
+    st.subheader('📈 Evolución histórica de precio')
+    mats=sorted(df[df.Tipo_registro.isin(RECIPE_TYPES)].Material_homologado.unique()); matp=st.selectbox('Material para tendencia',mats,key='mat_price')
+    variants=sorted(df[df.Material_homologado.eq(matp)].Variante_comparable.unique()); variantp=st.selectbox('Producto / variante comparable',variants,key='variant_price')
+    x=df[(df.Variante_comparable.eq(variantp))&df.Fecha.notna()].copy(); pp=x.Presentacion.iloc[0] if len(x) else '—'; metric,metric_label=price_metric_for_material(x,price_view); x=x[x[metric].gt(0)].sort_values('Fecha')
+    if x.empty: st.info('Sin precios comparables.')
+    else:
+        ev=st.selectbox('Visualización de evolución',['Líneas por proveedor','Área por proveedor','Índice base 100 por proveedor','Rango MIN–MAX mensual','Escalones de último precio'])
+        if ev=='Líneas por proveedor': fig=px.line(x,x='Fecha',y=metric,color='Proveedor',markers=True)
+        elif ev=='Área por proveedor': fig=px.area(x,x='Fecha',y=metric,color='Proveedor',facet_row='Proveedor',height=max(500,180*x.Proveedor.nunique()))
+        elif ev.startswith('Índice'):
+            z=x.copy(); z['Indice']=z.groupby('Proveedor')[metric].transform(lambda s:s/s.iloc[0]*100 if len(s) and s.iloc[0] else np.nan); fig=px.line(z,x='Fecha',y='Indice',color='Proveedor',markers=True); fig.add_hline(y=100,line_dash='dot')
+        elif ev.startswith('Rango'):
+            z=x.assign(Mes=x.Fecha.dt.to_period('M').dt.to_timestamp()).groupby('Mes')[metric].agg(['min','max']).reset_index(); fig=go.Figure(); fig.add_trace(go.Scatter(x=z.Mes,y=z['max'],mode='lines',name='MAX')); fig.add_trace(go.Scatter(x=z.Mes,y=z['min'],mode='lines',name='MIN',fill='tonexty'))
+        else:
+            z=x.sort_values('Fecha'); fig=go.Figure()
+            for p,g in z.groupby('Proveedor'): fig.add_trace(go.Scatter(x=g.Fecha,y=g[metric],mode='lines+markers',line_shape='hv',name=p))
+        fig.update_layout(height=540,title=f'{matp} · {pp}',yaxis_title=metric_label)
+        st.plotly_chart(fig,use_container_width=True)
+        explain('Todas las series comparan la misma presentación; cuando existe peso conocido se puede comparar por kg para evitar confundir bolsas/sacos de tamaños distintos.','Decidir si conviene comprar pronto, esperar, cambiar proveedor o fijar un precio objetivo.')
+
+# ---------------- FLETES ----------------
+if '🚚 Fletes' in T:
+    with T['🚚 Fletes']:
+        st.subheader('🚚 Transporte y costo puesto en obra')
+        fv=st.selectbox('Visualización de fletes',['Barras por proveedor','Treemap proveedor → cargo','Sunburst proveedor → cargo','Waterfall cronológico','Área acumulada'])
+        if fv.startswith('Barras'):
+            z=freight.groupby('Proveedor',as_index=False).Valor_analisis.sum().sort_values('Valor_analisis'); fig=px.bar(z,x='Valor_analisis',y='Proveedor',orientation='h',text_auto='.2s')
+        elif fv.startswith('Treemap'): fig=px.treemap(freight,path=['Proveedor','Descripcion_original'],values='Valor_analisis')
+        elif fv.startswith('Sunburst'): fig=px.sunburst(freight,path=['Proveedor','Descripcion_original'],values='Valor_analisis')
+        elif fv.startswith('Waterfall'):
+            z=freight.sort_values('Fecha'); fig=go.Figure(go.Waterfall(x=z.Fecha.astype(str),y=z.Valor_analisis,measure=['relative']*len(z)))
+        else:
+            z=freight.sort_values('Fecha').copy(); z['Acumulado']=z.Valor_analisis.cumsum(); fig=px.area(z,x='Fecha',y='Acumulado')
+        fig.update_layout(height=520,title='Fletes identificados')
+        st.plotly_chart(fig,use_container_width=True)
+        explain('Se muestran únicamente cargos reales de transporte mayores a ₡1; no se mezclan con la cantidad física de materiales.','Evaluar costo puesto en obra, consolidación de viajes y proveedores con mayor carga logística.')
+        st.metric('Flete histórico identificado',money(freight.Valor_analisis.sum()))
+
+# ---------------- FUTURO ----------------
+with T['🎯 Casas 5 y 6']:
+    st.subheader(f'🎯 Plan de compra · {future}')
+    plan=plan_future(df,recipe,value_col,price_view,n_future,waste)
+    if plan.empty: st.warning('No hay suficiente información comparable para generar el plan.')
+    else:
+        total_plan=plan.Costo_estimado.sum(); saving=plan.Ahorro_potencial.sum(); rising=(plan.Tendencia=='Subiendo').sum()
+        st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Presupuesto de referencia</div><div class='value'>{money(total_plan)}</div></div><div class='kpi'><div class='label'>Oportunidad vs meta</div><div class='value'>{money(saving)}</div></div><div class='kpi'><div class='label'>Materiales al alza</div><div class='value'>{rising}</div></div><div class='kpi'><div class='label'>Margen de seguridad</div><div class='value'>{waste_pct}%</div></div></div>",unsafe_allow_html=True)
+        fv=st.selectbox('Visualización del plan',['Ranking de ahorro potencial','Waterfall de oportunidad','Heatmap material × proveedor','Sankey material → proveedor','Barras de prioridad de compra'])
+        if fv.startswith('Ranking'):
+            z=plan.sort_values('Ahorro_potencial').tail(30); fig=px.bar(z,x='Ahorro_potencial',y='Material_homologado',orientation='h',text_auto='.2s',hover_data=['Proveedor_1','Precio_actual','Precio_meta'])
+        elif fv.startswith('Waterfall'):
+            z=plan.sort_values('Ahorro_potencial',ascending=False).head(20); fig=go.Figure(go.Waterfall(x=z.Material_homologado,y=-z.Ahorro_potencial,measure=['relative']*len(z))); fig.update_yaxes(title='Reducción potencial')
+        elif fv.startswith('Heatmap'):
+            z=plan.pivot_table(index='Material_homologado',columns='Proveedor_1',values='Costo_estimado',aggfunc='sum',fill_value=0); fig=px.imshow(z,aspect='auto',text_auto='.2s')
+        elif fv.startswith('Sankey'):
+            z=plan.sort_values('Costo_estimado',ascending=False).head(25); mats=z.Material_homologado.tolist(); provs=list(dict.fromkeys(z.Proveedor_1.tolist())); labels=mats+provs; src=[];tgt=[];val=[]
+            for _,r in z.iterrows(): src.append(labels.index(r.Material_homologado));tgt.append(labels.index(r.Proveedor_1));val.append(max(float(r.Costo_estimado),1))
+            fig=go.Figure(go.Sankey(node=dict(label=labels,pad=12,thickness=16),link=dict(source=src,target=tgt,value=val)))
+        else:
+            z=plan.copy(); z['Prioridad']=np.where(z.Tendencia.eq('Subiendo'),3,np.where(z.Tendencia.eq('Estable'),2,1))*np.log1p(z.Costo_estimado); z=z.sort_values('Prioridad').tail(30); fig=px.bar(z,x='Prioridad',y='Material_homologado',orientation='h',hover_data=['Proveedor_1','Tendencia','Cantidad_meta','Precio_meta'])
+        fig.update_layout(height=600,title='Plan priorizado de compra')
+        st.plotly_chart(fig,use_container_width=True)
+        explain('La receta fija las cantidades; el precio reciente, tendencia, MIN–MAX y recurrencia determinan proveedor recomendado, meta y prioridad.','Ordenar cotizaciones de Casas 5–6 y enfocar la negociación donde existe mayor impacto económico.')
+        material=st.selectbox('Detalle de material',plan.Material_homologado.tolist())
+        r=plan[plan.Material_homologado.eq(material)].iloc[0]
+        c1,c2,c3=st.columns(3)
+        c1.metric('Cantidad objetivo',f"{r.Cantidad_meta:,.1f} {r.Presentacion}")
+        c2.metric('🥇 Proveedor recomendado',r.Proveedor_1)
+        c3.metric('🎯 Precio meta',money(r.Precio_meta))
+        st.markdown(f"<div class='explain'><b>Último precio:</b> {money(r.Precio_actual)} {r.Metrica} · <b>Tendencia:</b> {r.Tendencia} ({pct(r.Cambio_pct)}) · <b>Alternativa:</b> {r.Proveedor_2}.<br><b>Origen de cantidad:</b> {r.Metodo}.</div>",unsafe_allow_html=True)
+        st.download_button('⬇️ Descargar plan Casas 5–6',plan.to_csv(index=False).encode('utf-8-sig'),'plan_compras_casas_5_6_v6.csv','text/csv')
+
+# ---------------- EXPLORADOR ----------------
+with T['🔎 Base maestra']:
+    st.subheader('🔎 Base maestra · auditoría')
+    c1,c2,c3,c4=st.columns(4); c1.metric('Líneas',f'{len(df):,}'); c2.metric('Materiales',df.Material_homologado.nunique()); c3.metric('Proveedores',df.Proveedor.nunique()); c4.metric('Regla 23/03',int(df.Casa3_regla_23mar.eq('Sí').sum()))
+    bv=st.selectbox('Visualización resumen de la base',['Treemap por familia','Sunburst familia → proveedor','Barras por tipo de registro','Pareto de proveedores','Heatmap familia × tipo'])
+    if bv.startswith('Treemap'): fig=px.treemap(df,path=['Familia'],values='Valor_analisis')
+    elif bv.startswith('Sunburst'): fig=px.sunburst(df,path=['Familia','Proveedor'],values='Valor_analisis')
+    elif bv.startswith('Barras'):
+        z=df.groupby('Tipo_registro',as_index=False).Valor_analisis.sum().sort_values('Valor_analisis'); fig=px.bar(z,x='Valor_analisis',y='Tipo_registro',orientation='h',text_auto='.2s')
+    elif bv.startswith('Pareto'):
+        z=df.groupby('Proveedor',as_index=False).Valor_analisis.sum().sort_values('Valor_analisis',ascending=False).head(25); z['Acum']=z.Valor_analisis.cumsum()/max(z.Valor_analisis.sum(),1)*100; fig=go.Figure([go.Bar(x=z.Proveedor,y=z.Valor_analisis),go.Scatter(x=z.Proveedor,y=z.Acum,yaxis='y2',mode='lines+markers')]); fig.update_layout(yaxis2=dict(overlaying='y',side='right',range=[0,105]))
+    else:
+        z=df.pivot_table(index='Familia',columns='Tipo_registro',values='Valor_analisis',aggfunc='sum',fill_value=0); fig=px.imshow(z,aspect='auto')
+    fig.update_layout(height=520,title='Resumen de la base homologada')
+    st.plotly_chart(fig,use_container_width=True)
+    explain('Esta visualización resume el universo completo, mientras la tabla permite auditar cada línea fuente.','Localizar concentraciones, anomalías o clasificaciones que deban corregirse antes de afectar la receta.')
+    search=st.text_input('🔍 Buscar descripción, material, proveedor o factura')
+    a,b,c=st.columns(3)
+    fam=a.multiselect('Familia',sorted(df.Familia.unique())); prov=b.multiselect('Proveedor',sorted(df.Proveedor.unique())); typ=c.multiselect('Tipo',sorted(df.Tipo_registro.unique()))
     z=df.copy()
-    if fam:z=z[z.Familia.isin(fam)]
-    if prov:z=z[z.Proveedor.isin(prov)]
-    if typ:z=z[z.Tipo_registro.isin(typ)]
-    if search:q=re.escape(search);z=z[z.Material_homologado.str.contains(q,case=False,regex=True,na=False)|z.Descripcion_original.str.contains(q,case=False,regex=True,na=False)|z.Proveedor.str.contains(q,case=False,regex=True,na=False)|z.Factura.astype(str).str.contains(q,case=False,regex=True,na=False)]
-    st.markdown(f"<div class='explain'><b>{len(z):,}</b> registros. La columna <b>Unidad comercial</b> evita mezclar paquetes con piezas.</div>",unsafe_allow_html=True);cols=['Fecha','Proveedor','Factura','Material_homologado','Descripcion_original','Cantidad','Presentacion','Unidad_comercial','Comparable','Precio_unitario','Precio_por_kg','Total_linea','Familia','Tipo_registro','Confianza_homologacion'];st.dataframe(z[cols].sort_values('Fecha',ascending=False),use_container_width=True,hide_index=True,height=530);st.download_button('⬇️ Descargar selección',z.to_csv(index=False).encode('utf-8-sig'),'base_maestra_filtrada_v5.csv','text/csv')
-st.divider();st.caption('V5 · Base homologada 2.392 líneas · Light/Dark · Presentaciones comerciales comparables · Superbloque como sistema constructivo.')
+    if fam: z=z[z.Familia.isin(fam)]
+    if prov: z=z[z.Proveedor.isin(prov)]
+    if typ: z=z[z.Tipo_registro.isin(typ)]
+    if search:
+        q=re.escape(search); z=z[z.Material_homologado.str.contains(q,case=False,regex=True,na=False)|z.Descripcion_original.str.contains(q,case=False,regex=True,na=False)|z.Proveedor.str.contains(q,case=False,regex=True,na=False)|z.Factura.astype(str).str.contains(q,case=False,regex=True,na=False)]
+    cols=['Fecha','Proveedor','Factura','Material_homologado','Descripcion_original','Cantidad','Presentacion','Unidad_comercial','Variante_comparable','Precio_sin_impuesto','Total_con_impuesto','Precio_por_kg','Familia','Tipo_registro','Componente_fisico','Confianza_homologacion','Casa3_regla_23mar']
+    st.dataframe(z[cols].sort_values('Fecha',ascending=False),use_container_width=True,hide_index=True,height=520)
+    st.download_button('⬇️ Descargar selección',z.to_csv(index=False).encode('utf-8-sig'),'base_maestra_filtrada_v6.csv','text/csv')
+
+st.divider()
+st.caption('Construir Mejor · V6 · 4 casas → 1 receta → evolución de costo → oportunidades → Casas 5 y 6 · receta total÷4 + excepción estructural 23/03 · múltiples visualizaciones en cada análisis.')
