@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Construction Intelligence V6.1",page_icon="🏗️",layout="wide",initial_sidebar_state="expanded")
+st.set_page_config(page_title="Construction Intelligence V6.2",page_icon="🏗️",layout="wide",initial_sidebar_state="expanded")
 BASE=Path(__file__).with_name("base_maestra_homologada_2392.csv")
 DEFAULT_H1_START=pd.Timestamp("2024-11-01"); DEFAULT_H1_END=pd.Timestamp("2025-03-22")
 DEFAULT_H2_START=pd.Timestamp("2025-03-23"); DEFAULT_H2_END=pd.Timestamp("2025-08-31")
@@ -183,6 +183,65 @@ def recipe_base(d):
     return r.sort_values(['Confianza_receta','Relevancia','Costo_base','Cantidad_base'],
                          ascending=[True,True,False,False])
 
+
+def recipe_cost_trend(d, recipe, price_view):
+    """
+    Revaloriza una receta fija por vivienda usando precios históricos observados.
+    No asigna facturas a casas. Mantiene cantidades constantes y cambia únicamente precios.
+    Para cada material/presentación usa el último precio observado en cada mes y forward-fill.
+    Solo incorpora grupos con cantidad de receta positiva y al menos una observación de precio.
+    """
+    x=d.copy()
+    x=x[x.Fecha.notna() & x.Cantidad.gt(0)].copy()
+    x['Mes']=x.Fecha.dt.to_period('M').dt.to_timestamp()
+    pcol='Precio_con_impuesto' if price_view=='Costo final con impuesto' else 'Precio_sin_impuesto'
+
+    keys=['Material_homologado','Presentacion']
+    rr=recipe.groupby(keys,as_index=False).agg(Cantidad_receta=('Cantidad_base','sum'))
+    obs=x.groupby(keys+['Mes'],as_index=False).agg(
+        Precio_periodo=(pcol,'median'),
+        Observaciones=('Linea_id','count')
+    )
+    if obs.empty or rr.empty:
+        return pd.DataFrame()
+
+    months=pd.DataFrame({'Mes':pd.date_range(obs.Mes.min(),obs.Mes.max(),freq='MS')})
+    groups=rr[keys].drop_duplicates().copy()
+    groups['_k']=1; months['_k']=1
+    grid=groups.merge(months,on='_k').drop(columns='_k')
+    grid=grid.merge(obs,on=keys+['Mes'],how='left').sort_values(keys+['Mes'])
+
+    # Forward-fill only: a material contributes from the first month in which a price is known.
+    grid['Precio_util']=grid.groupby(keys)['Precio_periodo'].ffill()
+    grid=grid.merge(rr,on=keys,how='left')
+    grid['Costo_receta_material']=grid.Cantidad_receta*grid.Precio_util
+
+    # Coverage = share of recipe cost represented by material groups with known price that month,
+    # measured against the latest observable basket for comparability.
+    latest_prices=(obs.sort_values('Mes').groupby(keys,as_index=False).tail(1)[keys+['Precio_periodo']]
+                   .rename(columns={'Precio_periodo':'Precio_ref'}))
+    ref=rr.merge(latest_prices,on=keys,how='inner')
+    ref['Costo_ref']=ref.Cantidad_receta*ref.Precio_ref
+    total_ref=ref.Costo_ref.sum()
+
+    cov=grid[grid.Precio_util.notna()].merge(ref[keys+['Costo_ref']],on=keys,how='left')
+    cov_month=cov.groupby('Mes',as_index=False).Costo_ref.sum().rename(columns={'Costo_ref':'Costo_ref_cubierto'})
+    out=grid.groupby('Mes',as_index=False).agg(
+        Costo_receta=('Costo_receta_material','sum'),
+        Grupos_con_precio=('Precio_util','count')
+    )
+    out=out.merge(cov_month,on='Mes',how='left')
+    out['Cobertura_pct']=np.where(total_ref>0,out.Costo_ref_cubierto/total_ref*100,0)
+
+    # Normalize to first sufficiently covered month to provide an index.
+    valid=out[out.Cobertura_pct>=70].copy()
+    if len(valid):
+        base=float(valid.iloc[0].Costo_receta)
+        out['Indice_costo']=np.where(base>0,out.Costo_receta/base*100,np.nan)
+    else:
+        out['Indice_costo']=np.nan
+    return out
+
 def drivers(a,b):
     aa=a.groupby('Material_homologado').Valor_analisis.sum();bb=b.groupby('Material_homologado').Valor_analisis.sum();c=pd.concat([aa.rename('A'),bb.rename('B')],axis=1).fillna(0);c['Delta']=c.B-c.A;c['AbsDelta']=c.Delta.abs();return c.sort_values('AbsDelta',ascending=False)
 def signal_text(trend,current,target):
@@ -197,7 +256,7 @@ def build_animation(n_houses):
     components.html(f"""<div id='buildv6'><style>#buildv6{{font-family:system-ui;color:CanvasText;background:Canvas;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:22px;padding:18px}}.wrap{{display:grid;grid-template-columns:minmax(220px,.7fr) minmax(360px,1.5fr);gap:22px;align-items:center}}.houses{{display:flex;gap:22px;justify-content:center;flex-wrap:wrap}}.house{{width:120px;text-align:center;position:relative;padding-top:40px}}.roof{{width:0;height:0;border-left:66px solid transparent;border-right:66px solid transparent;border-bottom:54px solid color-mix(in srgb,CanvasText 75%,transparent);position:absolute;left:-6px;top:0;animation:drop .65s ease both}}.body{{height:135px;border:4px solid color-mix(in srgb,CanvasText 65%,transparent);border-radius:4px;position:relative;overflow:hidden;background:color-mix(in srgb,Canvas 88%,CanvasText)}}.floor{{position:absolute;left:0;right:0;height:50%;background:color-mix(in srgb,#19b99a 38%,Canvas);transform-origin:bottom;animation:fill 1.2s cubic-bezier(.2,.8,.2,1) both}}.f1{{bottom:0;animation-delay:.25s}}.f2{{top:0;animation-delay:.8s}}.door{{position:absolute;width:25px;height:45px;bottom:0;left:47px;background:Canvas}}.window{{position:absolute;width:22px;height:22px;border:2px solid CanvasText;top:28px;background:color-mix(in srgb,#ffcf57 55%,Canvas)}}.w1{{left:18px}}.w2{{right:18px}}.house label{{display:block;margin-top:8px;font-weight:800}}.timeline{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}}.stage{{border:1px solid color-mix(in srgb,CanvasText 13%,transparent);border-radius:12px;padding:8px;opacity:0;transform:translateY(7px);animation:show .45s ease forwards;animation-delay:var(--d)}}.stage span{{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:color-mix(in srgb,#19b99a 24%,Canvas);font-size:11px;font-weight:800;margin-right:5px}}.stage b{{font-size:12px}}.stage small{{display:block;opacity:.62;margin-top:4px}}@keyframes fill{{from{{transform:scaleY(0)}}to{{transform:scaleY(1)}}}}@keyframes drop{{from{{transform:translateY(-12px);opacity:0}}to{{transform:none;opacity:1}}}}@keyframes show{{to{{opacity:1;transform:none}}}}@media(prefers-reduced-motion:reduce){{*{{animation:none!important;opacity:1!important;transform:none!important}}}}@media(max-width:700px){{.wrap{{grid-template-columns:1fr}}.timeline{{grid-template-columns:repeat(2,1fr)}}}}</style><div class='wrap'><div class='houses'>{houses}</div><div><h3 style='margin:0 0 8px'>Ruta de construcción y abastecimiento</h3><p style='margin:0 0 12px;opacity:.68;font-size:13px'>La animación ilustra cómo el plan de compras acompaña las etapas; no representa avance real.</p><div class='timeline'>{stages}</div></div></div></div>""",height=485,scrolling=False)
 
 df=load_data()
-st.markdown("""<div class='hero'><div class='eyebrow'>Construction Intelligence · V6.1</div><h1>La receta de una casa como base de toda decisión</h1><p>2.392 líneas homologadas de 4 viviendas esencialmente iguales. La receta combina cantidades confirmadas de la última casa para materiales estructurales y total consolidado ÷ 4 para el resto, con costos netos e impuesto claramente separados.</p></div>""",unsafe_allow_html=True)
+st.markdown("""<div class='hero'><div class='eyebrow'>Construction Intelligence · V6.2</div><h1>La receta de una casa como base de toda decisión</h1><p>2.392 líneas homologadas de 4 viviendas esencialmente iguales. La receta combina cantidades confirmadas de la última casa para materiales estructurales y total consolidado ÷ 4 para el resto, con costos netos e impuesto claramente separados y una tendencia histórica del costo de construir la misma receta.</p></div>""",unsafe_allow_html=True)
 with st.sidebar:
     st.header('⚙️ Supuestos y lectura')
     st.markdown("<div class='sourcebox'><b>🏠 Regla principal de la receta</b><br>Las 4 casas son esencialmente iguales. Para construir la receta por vivienda se usa el total consolidado de cada material ÷ 4.</div>",unsafe_allow_html=True)
@@ -218,6 +277,7 @@ df['Valor_analisis']=df[value_col]
 scope=scope_data(df)
 freight=scope[scope.Es_flete & (scope.Valor_analisis>1)].copy()
 recipe=recipe_base(df)
+recipe_trend=recipe_cost_trend(df,recipe,price_view)
 labels=['🧱 Receta de una casa','🏠 Anatomía de la casa','✨ Resumen ejecutivo','🏪 Material × proveedor','📈 Evolución de precio','🎯 Casas 5 y 6','🔎 Explorador maestro']
 if len(freight):labels.insert(5,'🚚 Fletes')
 tabs=st.tabs(labels);ti={name:tabs[i] for i,name in enumerate(labels)}
@@ -250,6 +310,45 @@ with ti['✨ Resumen ejecutivo']:
     fig.update_layout(height=520,template='streamlit',title='¿Qué pesa más dentro de una casa estándar?')
     st.plotly_chart(fig,use_container_width=True)
     chart_explain('El tamaño/altura representa el costo estimado de ese material dentro de una sola casa.','Concentrar validación, negociación y seguimiento en los materiales que explican la mayor parte del presupuesto.')
+
+    st.markdown("### 📉 Tendencia del costo de construir la misma casa")
+    rt=recipe_trend.copy()
+    if len(rt):
+        rt_show=rt[rt.Cobertura_pct>=70].copy()
+        if len(rt_show)>=2:
+            mode=st.radio('Lectura de tendencia',['Costo estimado de la receta','Índice de costo (base = 100)'],horizontal=True)
+            if mode=='Costo estimado de la receta':
+                fig=px.area(rt_show,x='Mes',y='Costo_receta',markers=True,
+                            hover_data={'Cobertura_pct':':.1f','Costo_receta':':,.0f'})
+                fig.update_yaxes(title='Costo estimado de una casa')
+                fig.update_layout(title='Costo estimado de una receta fija a precios históricos')
+            else:
+                fig=px.line(rt_show,x='Mes',y='Indice_costo',markers=True,
+                            hover_data={'Cobertura_pct':':.1f','Indice_costo':':.1f'})
+                fig.add_hline(y=100,line_dash='dot')
+                fig.update_yaxes(title='Índice de costo')
+                fig.update_layout(title='Índice histórico del costo de la receta estándar')
+
+            fig.update_layout(height=470,template='streamlit')
+            st.plotly_chart(fig,use_container_width=True)
+
+            first=rt_show.iloc[0]
+            last=rt_show.iloc[-1]
+            pct=((last.Costo_receta/first.Costo_receta)-1)*100 if first.Costo_receta else np.nan
+            direction='disminuyó' if pct<0 else 'aumentó'
+            st.markdown(
+                f"<div class='explain'><b>Lectura:</b> manteniendo fija la cantidad de materiales de una vivienda, "
+                f"el costo estimado {direction} <b>{abs(pct):.1f}%</b> entre "
+                f"{first.Mes.strftime('%b %Y')} y {last.Mes.strftime('%b %Y')}. "
+                f"La cobertura del último período es {last.Cobertura_pct:.0f}% de la canasta de referencia.<br>"
+                f"<b>Decisión:</b> permite medir si la eficiencia de compra y la evolución de precios realmente están "
+                f"reduciendo el costo de construir una casa comparable, sin asignar facturas artificialmente a Casa 1–4.</div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.info('No hay suficientes meses con cobertura ≥70% para mostrar una tendencia comparable.')
+    else:
+        st.info('No hay suficientes precios históricos para construir la tendencia de la receta.')
 
     st.markdown("<div class='sourcebox'><b>Superbloque:</b> permanece separado del block convencional porque puede representar un sistema constructivo con acero y otros componentes, no únicamente block.</div>",unsafe_allow_html=True)
 
@@ -348,7 +447,7 @@ with ti['🧱 Receta de una casa']:
                  use_container_width=True,hide_index=True,height=520)
     st.download_button('⬇️ Descargar receta estándar por casa',
                        rec[show_cols].to_csv(index=False).encode('utf-8-sig'),
-                       'receta_estandar_por_casa_v6_1.csv','text/csv')
+                       'receta_estandar_por_casa_v6_2.csv','text/csv')
 
     st.markdown('### 🗓️ Ruta de abastecimiento')
     scale=st.segmented_control('Escala',['Semanas','Meses'],default='Semanas')
@@ -415,7 +514,7 @@ with ti['🎯 Casas 5 y 6']:
             for _,z in q.iterrows():src.append(labs.index(z.Material_homologado));tgt.append(labs.index(z.Proveedor_1));val.append(max(float(z.Costo_hist),1))
             fig=go.Figure(go.Sankey(node=dict(label=labs,pad=12,thickness=16),link=dict(source=src,target=tgt,value=val)))
         else:q=plan.copy();q['Urgencia']=np.where(q.Tendencia_1.eq('Subiendo'),3,np.where(q.Tendencia_1.eq('Estable'),2,1));fig=px.scatter(q,x='Urgencia',y='Cantidad_meta',size='Costo_hist',color='Tendencia_1',hover_name='Material_homologado',hover_data=['Proveedor_1','Precio_meta'])
-        fig.update_layout(height=560,template='streamlit',title='Plan de compra priorizado');st.plotly_chart(fig,use_container_width=True);chart_explain('Tamaño = impacto económico; tendencia, brecha y volumen indican riesgo u oportunidad.','Ordenar cotizaciones y negociaciones por prioridad real.');st.download_button('⬇️ Descargar plan',plan.to_csv(index=False).encode('utf-8-sig'),'plan_compras_casas_5_6_v6_1.csv','text/csv')
+        fig.update_layout(height=560,template='streamlit',title='Plan de compra priorizado');st.plotly_chart(fig,use_container_width=True);chart_explain('Tamaño = impacto económico; tendencia, brecha y volumen indican riesgo u oportunidad.','Ordenar cotizaciones y negociaciones por prioridad real.');st.download_button('⬇️ Descargar plan',plan.to_csv(index=False).encode('utf-8-sig'),'plan_compras_casas_5_6_v6_2.csv','text/csv')
 
 with ti['🔎 Explorador maestro']:
     st.subheader('🔎 Explorador maestro');st.caption('Auditoría de las líneas fuente que alimentan la receta y los análisis de precios.');c1,c2,c3,c4=st.columns(4);c1.metric('Líneas',f'{len(df):,}');c2.metric('Materiales',df.Material_homologado.nunique());c3.metric('Proveedores',df.Proveedor.nunique());c4.metric('Pendientes manuales','0');search=st.text_input('🔍 Buscar');a,b,c=st.columns(3)
@@ -427,5 +526,5 @@ with ti['🔎 Explorador maestro']:
     if prov:z=z[z.Proveedor.isin(prov)]
     if typ:z=z[z.Tipo_registro.isin(typ)]
     if search:q=re.escape(search);z=z[z.Material_homologado.str.contains(q,case=False,regex=True,na=False)|z.Descripcion_original.str.contains(q,case=False,regex=True,na=False)|z.Proveedor.str.contains(q,case=False,regex=True,na=False)|z.Factura.astype(str).str.contains(q,case=False,regex=True,na=False)]
-    st.markdown(f"<div class='explain'><b>{len(z):,}</b> registros. La columna <b>Unidad comercial</b> evita mezclar paquetes con piezas. Los campos fiscales distinguen precio neto, impuesto estimado y costo final.</div>",unsafe_allow_html=True);cols=['Fecha','Proveedor','Factura','Material_homologado','Descripcion_original','Cantidad','Presentacion','Unidad_comercial','Comparable','Componente_vivienda','Precio_sin_impuesto','Impuesto_estimado','Precio_con_impuesto','Subtotal_sin_impuesto','Total_con_impuesto','Estado_impuesto','Precio_por_kg','Familia','Tipo_registro','Confianza_homologacion'];st.dataframe(z[cols].sort_values('Fecha',ascending=False),use_container_width=True,hide_index=True,height=530);st.download_button('⬇️ Descargar selección',z.to_csv(index=False).encode('utf-8-sig'),'base_maestra_filtrada_v6_1.csv','text/csv')
-st.divider();st.caption('V6.1 · Base homologada 2.392 líneas · Receta total÷4 + excepción 23/03 · Light/Dark · Presentaciones comparables · Superbloque como sistema constructivo.')
+    st.markdown(f"<div class='explain'><b>{len(z):,}</b> registros. La columna <b>Unidad comercial</b> evita mezclar paquetes con piezas. Los campos fiscales distinguen precio neto, impuesto estimado y costo final.</div>",unsafe_allow_html=True);cols=['Fecha','Proveedor','Factura','Material_homologado','Descripcion_original','Cantidad','Presentacion','Unidad_comercial','Comparable','Componente_vivienda','Precio_sin_impuesto','Impuesto_estimado','Precio_con_impuesto','Subtotal_sin_impuesto','Total_con_impuesto','Estado_impuesto','Precio_por_kg','Familia','Tipo_registro','Confianza_homologacion'];st.dataframe(z[cols].sort_values('Fecha',ascending=False),use_container_width=True,hide_index=True,height=530);st.download_button('⬇️ Descargar selección',z.to_csv(index=False).encode('utf-8-sig'),'base_maestra_filtrada_v6_2.csv','text/csv')
+st.divider();st.caption('V6.2 · Base homologada 2.392 líneas · Receta total÷4 + excepción 23/03 · Light/Dark · Presentaciones comparables · Superbloque como sistema constructivo.')
