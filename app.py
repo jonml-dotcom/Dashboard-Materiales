@@ -511,6 +511,37 @@ def structural_system_audit(d, value_col):
     ],columns=['Evidencia','Cantidad','Referencia_Casa4','Equivalencia_pct'])
     return {'pre_block':pre,'block_suppliers':suppliers,'superblock':sb,'evidence':evidence}
 
+
+def house_1_2_overlap_audit(df, value_col):
+    h=house_cost_history(df,value_col,100.0)
+    c1=df[df.Fecha.between(pd.Timestamp('2024-11-01'),pd.Timestamp('2025-03-22'))].copy()
+    c2=df[df.Fecha.between(pd.Timestamp('2025-03-23'),pd.Timestamp('2025-08-31'))].copy()
+    finish_terms=['gypsum','pisos','enchapes','pintura','carpintería','mobiliario','adhesivos cerámicos',
+                  'puertas','cerraduras','acabados','sanitarios','plomería','vidrios','cielos','selladores']
+    def finish_mask(x):
+        s=x.Familia.fillna('').str.lower()
+        m=pd.Series(False,index=x.index)
+        for term in finish_terms:
+            m |= s.str.contains(term,regex=False)
+        return m
+    f1=float(c1.loc[finish_mask(c1),value_col].sum())
+    f2=float(c2.loc[finish_mask(c2),value_col].sum())
+    fam1=c1.groupby('Familia')[value_col].sum()
+    fam2=c2.groupby('Familia')[value_col].sum()
+    comp=pd.concat([fam1,fam2],axis=1,keys=['Casa1','Casa2']).fillna(0)
+    comp['Delta']=comp.Casa2-comp.Casa1
+    comp=comp.sort_values('Delta',ascending=False).reset_index()
+    sb=df[df.Proveedor.str.contains('SUPERBLOQUE',case=False,na=False)].copy()
+    sbqty=sb[(sb.Fecha==pd.Timestamp('2025-01-06')) & sb.Descripcion_original.str.contains('Sistema Mixto Superblock',case=False,na=False)]
+    qty2=float(sbqty.Cantidad.sum()) if len(sbqty) else 0
+    return {
+        'c1':float(c1[value_col].sum()),'c2':float(c2[value_col].sum()),
+        'delta':float(c2[value_col].sum()-c1[value_col].sum()),
+        'pct':float((c2[value_col].sum()/c1[value_col].sum()-1)*100) if c1[value_col].sum() else np.nan,
+        'finish1':f1,'finish2':f2,'finish_delta':f2-f1,
+        'drivers':comp,'sb_qty_jan6':qty2
+    }
+
 # ---------------- Sidebar / assumptions ----------------
 df0=load_data()
 with st.sidebar:
@@ -570,86 +601,63 @@ tabs=st.tabs(tab_names); T=dict(zip(tab_names,tabs))
 # ---------------- HISTORIA / PORTADA EJECUTIVA ----------------
 
 with T['🎬 Historia']:
-    st.subheader('📉 Costo por casa · la tendencia principal')
-    st.markdown("<div class='story-callout'><div class='headline'>La pregunta principal: ¿cuánto costó cada casa?</div>La visual compara directamente <b>Casa 1 → Casa 2 → Casa 3 → Casa 4</b>. Cada punto muestra el costo registrado del ciclo de construcción y recalca el sistema utilizado: <b>Casas 1–3 Superbloque</b> y <b>Casa 4 block convencional</b>. No intentamos hacer que los sistemas sean iguales: mostramos cuánto costó cada vivienda con el sistema que realmente se utilizó.</div>",unsafe_allow_html=True)
+    st.subheader('🧾 Costo de la receta estándar por casa')
+    st.markdown("<div class='story-callout'><div class='headline'>Primero: ¿en qué se compone el costo de una casa?</div>Este gráfico NO representa una casa histórica específica. Representa la <b>receta estándar por vivienda</b> construida a partir de las 2.392 líneas auditadas: materiales comunes distribuidos entre cuatro casas y estructura tratada según las reglas confirmadas.</div>",unsafe_allow_html=True)
 
-    hc=house_cost_history(df,value_col,house_area)
-    hv=st.selectbox('Visualización principal del costo por casa',[
-        'Línea ejecutiva Casa 1 → Casa 4',
-        'Slope de costos',
-        'Índice Casa 1 = 100',
-        'Barras con variación',
-        'Costo por m²',
-        'Waterfall Casa 1 → Casa 4'
-    ],key='house_cost_main')
-
-    if hv=='Línea ejecutiva Casa 1 → Casa 4':
-        fig=go.Figure()
-        fig.add_trace(go.Scatter(
-            x=hc.Fecha_grafico,y=hc.Costo,mode='lines+markers+text',
-            text=[f"{r.Casa}<br>{money(r.Costo)}<br>{r.Sistema}" for _,r in hc.iterrows()],
-            textposition='top center',
-            customdata=np.c_[hc.Casa,hc.Sistema,hc.Costo_m2,hc.Delta_pct],
-            hovertemplate='<b>%{customdata[0]}</b><br>%{customdata[1]}<br>Costo: ₡%{y:,.0f}<br>₡/m²: ₡%{customdata[2]:,.0f}<br>Variación: %{customdata[3]:.1f}%<extra></extra>',
-            line=dict(width=5),marker=dict(size=14)
-        ))
-        fig.update_layout(title='Costo registrado por vivienda · puntos de cierre desde 2025',xaxis_title='Cierre del ciclo de la casa',yaxis_title='Costo registrado (₡)',height=610)
-        read='Cada punto es una casa, ubicado en la fecha de cierre de su ciclo. La altura representa su costo registrado. La etiqueta indica qué sistema constructivo se utilizó.'
-    elif hv=='Slope de costos':
-        fig=go.Figure()
-        for i in range(len(hc)-1):
-            a,b=hc.iloc[i],hc.iloc[i+1]
-            fig.add_trace(go.Scatter(x=[a.Casa,b.Casa],y=[a.Costo,b.Costo],mode='lines+markers+text',
-                text=[f"{money(a.Costo)}<br>{a.Sistema}",f"{money(b.Costo)}<br>{b.Sistema}"],textposition='top center',
-                showlegend=False,line=dict(width=4),marker=dict(size=12)))
-        fig.update_layout(title='Pendiente del costo entre casas consecutivas',yaxis_title='Costo registrado (₡)',height=610)
-        read='Cada segmento une dos casas consecutivas. Una pendiente hacia abajo significa que la casa siguiente registró menor costo; las etiquetas muestran el sistema usado.'
-    elif hv=='Índice Casa 1 = 100':
-        fig=px.line(hc,x='Casa',y='Indice',markers=True,text='Sistema')
-        fig.update_traces(textposition='top center',line=dict(width=5),marker=dict(size=13))
-        fig.add_hline(y=100,line_dash='dash',annotation_text='Casa 1 = 100')
-        fig.update_layout(title='Costo relativo · Casa 1 = 100',yaxis_title='Índice de costo',height=610)
-        read='Casa 1 se fija en 100. Un valor de 85 significa que esa vivienda costó 15% menos que Casa 1. El texto sobre cada punto identifica el sistema.'
-    elif hv=='Barras con variación':
-        q=hc.copy()
-        q['Etiqueta']=[f"{money(r.Costo)}<br>{'' if pd.isna(r.Delta_pct) else f'{r.Delta_pct:+.1f}%'}<br>{r.Sistema}" for _,r in q.iterrows()]
-        fig=px.bar(q,x='Casa',y='Costo',text='Etiqueta',hover_data=['Sistema','Costo_m2','Inicio','Fin'])
-        fig.update_traces(textposition='outside')
-        fig.update_layout(title='Costo de cada casa + variación frente a la anterior',yaxis_title='Costo registrado (₡)',height=610)
-        read='La altura compara el costo total. Sobre cada barra aparece el costo, la variación frente a la casa anterior y el sistema constructivo.'
-    elif hv=='Costo por m²':
-        fig=px.line(hc,x='Casa',y='Costo_m2',markers=True,text='Sistema')
-        fig.update_traces(textposition='top center',line=dict(width=5),marker=dict(size=13))
-        fig.update_layout(title=f'Costo registrado por m² · referencia {house_area:.0f} m²',yaxis_title='₡/m²',height=610)
-        read=f'El costo de cada ciclo se divide entre {house_area:.0f} m² de referencia. Permite comparar las cuatro viviendas en una escala común; cada punto conserva el sistema utilizado.'
-    else:
-        measures=['absolute']+['relative']*(len(hc)-1)
-        y=[hc.iloc[0].Costo]+hc.Delta.iloc[1:].tolist()
-        labels=[f"{r.Casa}<br>{r.Sistema}" for _,r in hc.iterrows()]
-        fig=go.Figure(go.Waterfall(x=labels,measure=measures,y=y,
-            text=[money(hc.iloc[0].Costo)]+[f"{x:+,.0f}" for x in hc.Delta.iloc[1:]],textposition='outside'))
-        fig.update_layout(title='Cómo cambió el costo de una casa a la siguiente',yaxis_title='Variación de costo (₡)',height=610)
-        read='Casa 1 parte de su costo registrado. Cada barra posterior muestra cuánto aumentó o disminuyó el costo al pasar a la siguiente casa, manteniendo visible el sistema utilizado.'
-
-    st.plotly_chart(fig,use_container_width=True)
-
-    first,last=hc.iloc[0],hc.iloc[-1]
-    total_change=(last.Costo/first.Costo-1)*100 if first.Costo else np.nan
-    minrow=hc.loc[hc.Costo.idxmin()]
-    direction='reducción' if total_change<0 else 'aumento'
-    insight=(f"De {first.Casa} ({first.Sistema}) a {last.Casa} ({last.Sistema}) se observa un {direction} de "
-             f"{abs(total_change):.1f}% ({money(last.Costo-first.Costo)}). "
-             f"La vivienda de menor costo registrado es {minrow.Casa}, construida con {minrow.Sistema}, por {money(minrow.Costo)}.")
-    explain(
-        read,
-        f"Usar esta comparación como referencia principal para decidir qué aprendizajes del sistema y de las compras conviene trasladar a Casas 5 y 6. La prioridad es entender por qué {minrow.Casa} logró el menor costo.",
-        insight
+    rplot=recipe[~recipe.Confianza_receta.eq('Revisar sistema')].copy()
+    recipe_view=st.selectbox(
+        'Visualización del costo de la receta',
+        ['Treemap por familia','Pareto de costo','Sunburst familia → material','Donut por familia','Waterfall por familia'],
+        key='cover_recipe_cost'
     )
-    st.caption("Nota metodológica: el eje temporal muestra el cierre de cada ciclo, por eso la gráfica inicia en 2025. El costo de Casa 1 sí incorpora las compras de su ciclo desde noviembre de 2024. Los períodos son: Casa 1 01/11/2024–22/03/2025; Casa 2 23/03/2025–31/08/2025; Casa 3 01/09/2025–22/03/2026; Casa 4 23/03/2026–31/08/2026.")
+    fam_recipe=(rplot.groupby('Familia',as_index=False)
+                .agg(Costo=('Costo_por_casa','sum'),Materiales=('Material_homologado','nunique'))
+                .sort_values('Costo',ascending=False))
+    if recipe_view=='Treemap por familia':
+        rfig=px.treemap(rplot,path=['Familia','Material_homologado'],values='Costo_por_casa',
+                        hover_data=['Cantidad_por_casa','Confianza_receta'])
+        rfig.update_layout(title='Composición del costo de la receta estándar',height=590)
+        rread='Cada rectángulo es una familia o material. Mientras mayor sea el área, mayor es su peso en el costo estándar de una vivienda.'
+    elif recipe_view=='Pareto de costo':
+        q=fam_recipe.copy()
+        q['Acum']=q.Costo.cumsum()/max(q.Costo.sum(),1)*100
+        rfig=go.Figure()
+        rfig.add_trace(go.Bar(x=q.Familia,y=q.Costo,name='Costo por familia'))
+        rfig.add_trace(go.Scatter(x=q.Familia,y=q.Acum,yaxis='y2',mode='lines+markers',name='% acumulado'))
+        rfig.update_layout(title='Pareto del costo de la receta',height=590,
+                           yaxis_title='Costo por casa (₡)',
+                           yaxis2=dict(overlaying='y',side='right',range=[0,105],title='% acumulado'))
+        rread='Las barras ordenan las familias de mayor a menor costo. La línea muestra cuánto del presupuesto se acumula al sumar las familias principales.'
+    elif recipe_view=='Sunburst familia → material':
+        rfig=px.sunburst(rplot,path=['Familia','Material_homologado'],values='Costo_por_casa',
+                         hover_data=['Cantidad_por_casa','Confianza_receta'])
+        rfig.update_layout(title='Familia → material dentro de la receta',height=590)
+        rread='El centro agrupa por familia y el segundo nivel abre los materiales. El tamaño de cada segmento representa su costo por casa.'
+    elif recipe_view=='Donut por familia':
+        rfig=px.pie(fam_recipe,values='Costo',names='Familia',hole=.55)
+        rfig.update_layout(title='Distribución porcentual del costo estándar',height=590)
+        rread='Cada segmento representa la participación de una familia en el costo de la receta. Los segmentos grandes son los principales focos de negociación.'
+    else:
+        q=fam_recipe.head(12).copy()
+        rfig=go.Figure(go.Waterfall(
+            x=q.Familia,measure=['relative']*len(q),y=q.Costo,
+            text=[money(v) for v in q.Costo],textposition='outside'
+        ))
+        rfig.update_layout(title='Cómo se construye el costo de la receta · principales familias',height=590,yaxis_title='Costo por casa (₡)')
+        rread='Cada barra agrega el costo de una familia a la receta estándar. Permite ver cuáles componentes construyen el costo total de una vivienda.'
 
+    st.plotly_chart(rfig,use_container_width=True)
+    topfam=fam_recipe.iloc[0] if len(fam_recipe) else None
+    top3=fam_recipe.head(3).Costo.sum()/max(fam_recipe.Costo.sum(),1)*100 if len(fam_recipe) else 0
+    explain(
+        rread,
+        f"Concentrar la negociación y el control de cantidades en las familias de mayor peso. {'La primera prioridad es '+str(topfam.Familia) if topfam is not None else 'Validar la receta antes de comprar'}.",
+        f"Las tres familias de mayor costo concentran {top3:.1f}% de la receta estándar. El costo total estimado por casa es {money(rplot.Costo_por_casa.sum())}."
+    )
 
-    # Comparación histórica adicional debajo del gráfico de costo de receta.
-    st.markdown('### 🏠 Costo de construcción · Casa 1 vs Casa 2 vs Casa 3 vs Casa 4')
+    st.markdown('---')
+    # Segundo gráfico de portada: costo histórico casa por casa.
+    st.markdown('### 🏠 Costo histórico registrado · Casa 1 vs Casa 2 vs Casa 3 vs Casa 4')
     cover_hc=house_cost_history(df,value_col,house_area)
     cover_view=st.selectbox(
         'Visualización de comparación casa por casa',
@@ -705,6 +713,24 @@ with T['🎬 Historia']:
         f"Usar esta comparación para identificar qué casa y sistema dejaron el mejor costo histórico y qué prácticas conviene trasladar a Casas 5 y 6. El primer foco de análisis debe ser la diferencia entre {most_expensive.Casa} y {cheapest.Casa}.",
         f"{most_expensive.Casa} registra el mayor costo ({money(most_expensive.Costo)}) y {cheapest.Casa} el menor ({money(cheapest.Costo)}). Casa 4, construida con block convencional, registra {money(c4.Costo)} y está {abs(cover_change):.1f}% {'por debajo' if cover_change<0 else 'por encima'} de Casa 1."
     )
+
+
+    st.markdown('### 🕵️ Auditoría de la diferencia Casa 1 vs Casa 2')
+    ov=house_1_2_overlap_audit(df,value_col)
+    st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Casa 1 · ventana actual</div><div class='value'>{money(ov['c1'])}</div><div class='sub'>01/11/2024–22/03/2025</div></div><div class='kpi'><div class='label'>Casa 2 · ventana actual</div><div class='value'>{money(ov['c2'])}</div><div class='sub'>23/03/2025–31/08/2025</div></div><div class='kpi'><div class='label'>Diferencia</div><div class='value'>{money(ov['delta'])}</div><div class='sub'>{ov['pct']:+.1f}%</div></div><div class='kpi'><div class='label'>Acabados adicionales en ventana 2</div><div class='value'>{money(ov['finish_delta'])}</div><div class='sub'>señal de posible solape</div></div></div>",unsafe_allow_html=True)
+
+    topd=ov['drivers'].head(10).copy()
+    af=px.bar(topd.sort_values('Delta'),x='Delta',y='Familia',orientation='h',
+              hover_data=['Casa1','Casa2'])
+    af.update_layout(title='Familias que explican el exceso de gasto de la ventana Casa 2',height=520,xaxis_title='Casa 2 − Casa 1 (₡)')
+    st.plotly_chart(af,use_container_width=True)
+    explain(
+        'Las barras muestran cuánto más se gastó en cada familia durante la ventana asignada a Casa 2 respecto a la ventana asignada a Casa 1.',
+        'No aceptar la diferencia Casa 1 vs Casa 2 como costo real por vivienda hasta reconstruir la atribución de facturas que cruzan fases de obra.',
+        f"La ventana Casa 2 supera a Casa 1 en {money(ov['delta'])}. Solo las familias de acabados/instalaciones explican aproximadamente {money(ov['finish_delta'])} adicionales. Además, la factura de Superbloque del 06/01/2025 registra cantidad {ov['sb_qty_jan6']:.0f} del sistema mixto, evidencia de que una sola ventana temporal puede contener materiales para más de una vivienda."
+    )
+    st.warning("⚠️ Hallazgo de auditoría: las fechas por sí solas NO son suficientes para atribuir todo el gasto a una casa. Casa 1 casi no contiene pisos, gypsum, carpintería/mobiliario ni otros acabados, mientras esos rubros aparecen con fuerza después del 23/03/2025. Al mismo tiempo, el 25/03/2025 entra otro sistema Superbloque. Esto indica fases solapadas: acabados de una casa pueden coincidir con el arranque estructural de la siguiente.")
+    st.markdown("<div class='sourcebox'><b>Metodología recomendada para el costo histórico definitivo:</b> 1) asignar primero las facturas con evidencia directa de casa/sistema; 2) separar compras compartidas o de varias unidades; 3) usar secuencia constructiva para detectar acabados que pertenecen a la vivienda anterior; 4) distribuir compras comunes solo cuando no exista una evidencia mejor; 5) mantener un nivel de confianza por línea. Hasta terminar esa reconstrucción, el gráfico debe leerse como <b>gasto registrado por ventana temporal</b>, no como costo definitivo auditado por casa.</div>",unsafe_allow_html=True)
 
     st.markdown('### 🏠 Costo y sistema, casa por casa')
     cols=st.columns(4)
