@@ -535,88 +535,159 @@ tab_names += ['🎯 Casas 5 y 6','🔎 Base maestra']
 tabs=st.tabs(tab_names); T=dict(zip(tab_names,tabs))
 
 # ---------------- HISTORIA / PORTADA EJECUTIVA ----------------
-with T['🎬 Historia']:
-    st.subheader('🎬 De histórico a decisión')
-    st.markdown("<div class='story-callout'><div class='headline'>Cuatro casas nos enseñaron qué comprar; la V7 primero valida si los precios son realmente comparables.</div>La trayectoria principal ya no mezcla servicios, herramientas, sistemas constructivos ni presentaciones incompatibles. Un cambio de costo solo se interpreta después de revisar cobertura y drivers.</div>",unsafe_allow_html=True)
-    st.info('🔎 **Qué cambió frente a la curva con picos:** la auditoría detectó que cortes de melamina estaban clasificados como láminas y que un sistema Superblock no debía entrar en la canasta convencional. También se separaron bisagras, cerraduras y cerrojos. Los picos artificiales dejan de formar parte de la historia principal.')
 
+with T['🎬 Historia']:
+    st.subheader('📉 Costo por casa · la tendencia principal')
+    st.markdown("<div class='story-callout'><div class='headline'>La pregunta principal: ¿cuánto costó cada casa?</div>La visual compara directamente <b>Casa 1 → Casa 2 → Casa 3 → Casa 4</b>. Cada punto muestra el costo registrado del ciclo de construcción y recalca el sistema utilizado: <b>Casas 1–3 Superbloque</b> y <b>Casa 4 block convencional</b>. No intentamos hacer que los sistemas sean iguales: mostramos cuánto costó cada vivienda con el sistema que realmente se utilizó.</div>",unsafe_allow_html=True)
+
+    hc=house_cost_history(df,value_col,house_area)
+    hv=st.selectbox('Visualización principal del costo por casa',[
+        'Línea ejecutiva Casa 1 → Casa 4',
+        'Slope de costos',
+        'Índice Casa 1 = 100',
+        'Barras con variación',
+        'Costo por m²',
+        'Waterfall Casa 1 → Casa 4'
+    ],key='house_cost_main')
+
+    if hv=='Línea ejecutiva Casa 1 → Casa 4':
+        fig=go.Figure()
+        fig.add_trace(go.Scatter(
+            x=hc.Fecha_grafico,y=hc.Costo,mode='lines+markers+text',
+            text=[f"{r.Casa}<br>{money(r.Costo)}<br>{r.Sistema}" for _,r in hc.iterrows()],
+            textposition='top center',
+            customdata=np.c_[hc.Casa,hc.Sistema,hc.Costo_m2,hc.Delta_pct],
+            hovertemplate='<b>%{customdata[0]}</b><br>%{customdata[1]}<br>Costo: ₡%{y:,.0f}<br>₡/m²: ₡%{customdata[2]:,.0f}<br>Variación: %{customdata[3]:.1f}%<extra></extra>',
+            line=dict(width=5),marker=dict(size=14)
+        ))
+        fig.update_layout(title='Costo registrado por vivienda · puntos de cierre desde 2025',xaxis_title='Cierre del ciclo de la casa',yaxis_title='Costo registrado (₡)',height=610)
+        read='Cada punto es una casa, ubicado en la fecha de cierre de su ciclo. La altura representa su costo registrado. La etiqueta indica qué sistema constructivo se utilizó.'
+    elif hv=='Slope de costos':
+        fig=go.Figure()
+        for i in range(len(hc)-1):
+            a,b=hc.iloc[i],hc.iloc[i+1]
+            fig.add_trace(go.Scatter(x=[a.Casa,b.Casa],y=[a.Costo,b.Costo],mode='lines+markers+text',
+                text=[f"{money(a.Costo)}<br>{a.Sistema}",f"{money(b.Costo)}<br>{b.Sistema}"],textposition='top center',
+                showlegend=False,line=dict(width=4),marker=dict(size=12)))
+        fig.update_layout(title='Pendiente del costo entre casas consecutivas',yaxis_title='Costo registrado (₡)',height=610)
+        read='Cada segmento une dos casas consecutivas. Una pendiente hacia abajo significa que la casa siguiente registró menor costo; las etiquetas muestran el sistema usado.'
+    elif hv=='Índice Casa 1 = 100':
+        fig=px.line(hc,x='Casa',y='Indice',markers=True,text='Sistema')
+        fig.update_traces(textposition='top center',line=dict(width=5),marker=dict(size=13))
+        fig.add_hline(y=100,line_dash='dash',annotation_text='Casa 1 = 100')
+        fig.update_layout(title='Costo relativo · Casa 1 = 100',yaxis_title='Índice de costo',height=610)
+        read='Casa 1 se fija en 100. Un valor de 85 significa que esa vivienda costó 15% menos que Casa 1. El texto sobre cada punto identifica el sistema.'
+    elif hv=='Barras con variación':
+        q=hc.copy()
+        q['Etiqueta']=[f"{money(r.Costo)}<br>{'' if pd.isna(r.Delta_pct) else f'{r.Delta_pct:+.1f}%'}<br>{r.Sistema}" for _,r in q.iterrows()]
+        fig=px.bar(q,x='Casa',y='Costo',text='Etiqueta',hover_data=['Sistema','Costo_m2','Inicio','Fin'])
+        fig.update_traces(textposition='outside')
+        fig.update_layout(title='Costo de cada casa + variación frente a la anterior',yaxis_title='Costo registrado (₡)',height=610)
+        read='La altura compara el costo total. Sobre cada barra aparece el costo, la variación frente a la casa anterior y el sistema constructivo.'
+    elif hv=='Costo por m²':
+        fig=px.line(hc,x='Casa',y='Costo_m2',markers=True,text='Sistema')
+        fig.update_traces(textposition='top center',line=dict(width=5),marker=dict(size=13))
+        fig.update_layout(title=f'Costo registrado por m² · referencia {house_area:.0f} m²',yaxis_title='₡/m²',height=610)
+        read=f'El costo de cada ciclo se divide entre {house_area:.0f} m² de referencia. Permite comparar las cuatro viviendas en una escala común; cada punto conserva el sistema utilizado.'
+    else:
+        measures=['absolute']+['relative']*(len(hc)-1)
+        y=[hc.iloc[0].Costo]+hc.Delta.iloc[1:].tolist()
+        labels=[f"{r.Casa}<br>{r.Sistema}" for _,r in hc.iterrows()]
+        fig=go.Figure(go.Waterfall(x=labels,measure=measures,y=y,
+            text=[money(hc.iloc[0].Costo)]+[f"{x:+,.0f}" for x in hc.Delta.iloc[1:]],textposition='outside'))
+        fig.update_layout(title='Cómo cambió el costo de una casa a la siguiente',yaxis_title='Variación de costo (₡)',height=610)
+        read='Casa 1 parte de su costo registrado. Cada barra posterior muestra cuánto aumentó o disminuyó el costo al pasar a la siguiente casa, manteniendo visible el sistema utilizado.'
+
+    st.plotly_chart(fig,use_container_width=True)
+
+    first,last=hc.iloc[0],hc.iloc[-1]
+    total_change=(last.Costo/first.Costo-1)*100 if first.Costo else np.nan
+    minrow=hc.loc[hc.Costo.idxmin()]
+    direction='reducción' if total_change<0 else 'aumento'
+    insight=(f"De {first.Casa} ({first.Sistema}) a {last.Casa} ({last.Sistema}) se observa un {direction} de "
+             f"{abs(total_change):.1f}% ({money(last.Costo-first.Costo)}). "
+             f"La vivienda de menor costo registrado es {minrow.Casa}, construida con {minrow.Sistema}, por {money(minrow.Costo)}.")
+    explain(
+        read,
+        f"Usar esta comparación como referencia principal para decidir qué aprendizajes del sistema y de las compras conviene trasladar a Casas 5 y 6. La prioridad es entender por qué {minrow.Casa} logró el menor costo.",
+        insight
+    )
+    st.caption("Nota metodológica: el eje temporal muestra el cierre de cada ciclo, por eso la gráfica inicia en 2025. El costo de Casa 1 sí incorpora las compras de su ciclo desde noviembre de 2024. Los períodos son: Casa 1 01/11/2024–22/03/2025; Casa 2 23/03/2025–31/08/2025; Casa 3 01/09/2025–22/03/2026; Casa 4 23/03/2026–31/08/2026.")
+
+
+    # Comparación histórica adicional debajo del gráfico de costo de receta.
+    st.markdown('### 🏠 Costo de construcción · Casa 1 vs Casa 2 vs Casa 3 vs Casa 4')
+    cover_hc=house_cost_history(df,value_col,house_area)
+    cover_view=st.selectbox(
+        'Visualización de comparación casa por casa',
+        ['Línea comparativa','Barras comparativas','Slope','Índice Casa 1 = 100','Costo por m²'],
+        key='cover_house_compare'
+    )
+    if cover_view=='Línea comparativa':
+        cover_fig=go.Figure(go.Scatter(
+            x=cover_hc.Casa,y=cover_hc.Costo,mode='lines+markers+text',
+            text=[f"{money(r.Costo)}<br>{r.Sistema}" for _,r in cover_hc.iterrows()],
+            textposition='top center',
+            customdata=np.c_[cover_hc.Sistema,cover_hc.Costo_m2,cover_hc.Delta_pct],
+            hovertemplate='<b>%{x}</b><br>%{customdata[0]}<br>Costo: ₡%{y:,.0f}<br>₡/m²: ₡%{customdata[1]:,.0f}<br>Variación: %{customdata[2]:.1f}%<extra></extra>',
+            line=dict(width=5),marker=dict(size=14)
+        ))
+        cover_fig.update_layout(title='Costo registrado por casa y sistema constructivo',yaxis_title='Costo registrado (₡)',height=570)
+        cover_read='Cada punto representa una casa completa. La altura es su costo registrado y la etiqueta indica el sistema constructivo utilizado.'
+    elif cover_view=='Barras comparativas':
+        q=cover_hc.copy()
+        q['Etiqueta']=[f"{money(r.Costo)}<br>{r.Sistema}<br>{'' if pd.isna(r.Delta_pct) else f'{r.Delta_pct:+.1f}% vs anterior'}" for _,r in q.iterrows()]
+        cover_fig=px.bar(q,x='Casa',y='Costo',text='Etiqueta',hover_data=['Sistema','Costo_m2','Inicio','Fin'])
+        cover_fig.update_traces(textposition='outside')
+        cover_fig.update_layout(title='Costo total de construcción por casa',yaxis_title='Costo registrado (₡)',height=570)
+        cover_read='La altura de cada barra permite comparar las cuatro viviendas. La etiqueta muestra costo, sistema y variación contra la casa anterior.'
+    elif cover_view=='Slope':
+        cover_fig=go.Figure()
+        cover_fig.add_trace(go.Scatter(
+            x=cover_hc.Casa,y=cover_hc.Costo,mode='lines+markers+text',
+            text=[f"{r.Sistema}<br>{money(r.Costo)}" for _,r in cover_hc.iterrows()],
+            textposition='top center',line=dict(width=5),marker=dict(size=14)
+        ))
+        cover_fig.update_layout(title='Pendiente del costo Casa 1 → Casa 4',yaxis_title='Costo registrado (₡)',height=570)
+        cover_read='La pendiente muestra inmediatamente dónde subió o bajó el costo entre casas consecutivas; cada punto conserva el sistema usado.'
+    elif cover_view=='Índice Casa 1 = 100':
+        cover_fig=px.line(cover_hc,x='Casa',y='Indice',markers=True,text='Sistema')
+        cover_fig.update_traces(textposition='top center',line=dict(width=5),marker=dict(size=14))
+        cover_fig.add_hline(y=100,line_dash='dash',annotation_text='Casa 1 = 100')
+        cover_fig.update_layout(title='Costo relativo · Casa 1 = 100',yaxis_title='Índice',height=570)
+        cover_read='Casa 1 se convierte en la base 100. Un índice inferior a 100 significa que esa casa costó menos que Casa 1; uno superior significa que costó más.'
+    else:
+        cover_fig=px.line(cover_hc,x='Casa',y='Costo_m2',markers=True,text='Sistema')
+        cover_fig.update_traces(textposition='top center',line=dict(width=5),marker=dict(size=14))
+        cover_fig.update_layout(title=f'Costo por m² · referencia {house_area:.0f} m²',yaxis_title='₡/m²',height=570)
+        cover_read=f'Cada punto divide el costo de la casa entre {house_area:.0f} m² de referencia. Sirve para comparar el costo unitario manteniendo visible el sistema.'
+    st.plotly_chart(cover_fig,use_container_width=True)
+
+    c1=cover_hc.iloc[0]; c4=cover_hc.iloc[-1]
+    cover_change=(c4.Costo/c1.Costo-1)*100 if c1.Costo else np.nan
+    cheapest=cover_hc.loc[cover_hc.Costo.idxmin()]
+    most_expensive=cover_hc.loc[cover_hc.Costo.idxmax()]
+    explain(
+        cover_read,
+        f"Usar esta comparación para identificar qué casa y sistema dejaron el mejor costo histórico y qué prácticas conviene trasladar a Casas 5 y 6. El primer foco de análisis debe ser la diferencia entre {most_expensive.Casa} y {cheapest.Casa}.",
+        f"{most_expensive.Casa} registra el mayor costo ({money(most_expensive.Costo)}) y {cheapest.Casa} el menor ({money(cheapest.Costo)}). Casa 4, construida con block convencional, registra {money(c4.Costo)} y está {abs(cover_change):.1f}% {'por debajo' if cover_change<0 else 'por encima'} de Casa 1."
+    )
+
+    st.markdown('### 🏠 Costo y sistema, casa por casa')
+    cols=st.columns(4)
+    for i,(_,r) in enumerate(hc.iterrows()):
+        var='Punto de partida' if pd.isna(r.Delta_pct) else f"{r.Delta_pct:+.1f}% vs anterior"
+        cols[i].markdown(f"<div class='card'><div class='title'>{r.Casa}</div><div class='big'>{money(r.Costo)}</div><div class='meta'><b>{r.Sistema}</b><br>{money(r.Costo_m2)}/m²<br>{var}<br>{r.Inicio:%d/%m/%Y} → {r.Fin:%d/%m/%Y}</div></div>",unsafe_allow_html=True)
+
+    st.markdown('### 🔎 ¿Por qué cambió el costo?')
+    st.markdown("<div class='sourcebox'>La gráfica anterior responde <b>cuánto costó cada casa</b>. Las secciones de Sistemas, Drivers, Proveedores, Should Cost y Precios responden <b>por qué cambió</b>. Así evitamos confundir la tendencia principal con una serie mensual de compras.</div>",unsafe_allow_html=True)
+
+    # Secondary story/decision visuals retained, but no longer replace the house-cost trend.
     story_recipe=recipe[~recipe.Confianza_receta.eq('Revisar sistema')].copy()
     story_cost=story_recipe.Costo_por_casa.sum()
-    rt_story=trend[trend.Comparable].copy()
-    story_change=np.nan
-    if len(rt_story)>=2 and rt_story.iloc[0].Costo_receta:
-        story_change=(rt_story.iloc[-1].Costo_receta/rt_story.iloc[0].Costo_receta-1)*100
-
     story_plan=plan_future(df,recipe,value_col,price_view,2,waste)
     story_saving=story_plan.Ahorro_potencial.sum() if len(story_plan) else np.nan
-
-    st.markdown(
-        f"<div class='kpi-grid'>"
-        f"<div class='kpi'><div class='label'>Receta estándar</div><div class='value'>{money(story_cost)}</div><div class='sub'>materiales por casa · {label_tax}</div></div>"
-        f"<div class='kpi'><div class='label'>Materiales / m²</div><div class='value'>{money(story_cost/house_area)}</div><div class='sub'>{house_area:.0f} m² de referencia</div></div>"
-        f"<div class='kpi'><div class='label'>Evolución comparable</div><div class='value'>{pct(story_change)}</div><div class='sub'>misma receta · precios históricos</div></div>"
-        f"<div class='kpi'><div class='label'>Oportunidad Casas 5+6</div><div class='value'>{money(story_saving)}</div><div class='sub'>vs precio meta de compra</div></div>"
-        f"</div>", unsafe_allow_html=True
-    )
-
-    sv=st.selectbox(
-        'Visualización principal de la historia',
-        ['Trayectoria depurada','Drivers del último cambio','Índice base 100','Composición de la receta','Ruta 4 casas → Casas 5+6']
-    )
-
-    if sv=='Trayectoria depurada':
-        if len(rt_story)>=2:
-            fig=px.line(rt_story,x='Mes',y='Costo_receta',markers=True)
-            fig.update_traces(line=dict(width=5),marker=dict(size=9))
-            fig.update_layout(title='Evolución del costo comparable de la receta depurada',yaxis_title='Costo equivalente de materiales / casa')
-        else:
-            fig=go.Figure()
-            fig.add_annotation(text='Cobertura histórica insuficiente',showarrow=False)
-    elif sv=='Drivers del último cambio':
-        if len(rt_story)>=2:
-            last_month=rt_story.iloc[-1].Mes
-            dz=trend_driver_detail(df,recipe,unit_price_col,last_month).head(12)
-            fig=px.bar(dz.sort_values('Impacto'),x='Impacto',y='Material',orientation='h',text_auto='.2s',
-                       hover_data=['Familia','Sistema'])
-            fig.update_layout(title=f"Qué explica el cambio hacia {last_month:%b %Y}",xaxis_title='Impacto sobre costo por casa')
-        else:
-            fig=go.Figure(); fig.add_annotation(text='Cobertura histórica insuficiente',showarrow=False)
-    elif sv=='Índice base 100':
-        if len(rt_story)>=2:
-            fig=px.line(rt_story,x='Mes',y='Indice',markers=True)
-            fig.add_hline(y=100,line_dash='dot')
-            fig.update_layout(title='Índice del costo de construir la misma casa',yaxis_title='Índice base 100')
-        else:
-            fig=go.Figure(); fig.add_annotation(text='Cobertura histórica insuficiente',showarrow=False)
-    elif sv=='Composición de la receta':
-        z=story_recipe.groupby('Familia',as_index=False).Costo_por_casa.sum().sort_values('Costo_por_casa',ascending=False)
-        fig=px.treemap(z,path=['Familia'],values='Costo_por_casa')
-        fig.update_layout(title='¿Dónde se concentra el costo de una casa?')
-    else:
-        labels=['4 casas históricas','Receta estándar','Costo comparable','Oportunidades de compra','Casas 5 + 6']
-        fig=go.Figure(go.Sankey(
-            node=dict(label=labels,pad=18,thickness=20),
-            link=dict(source=[0,1,2,3],target=[1,2,3,4],value=[4,4,4,4])
-        ))
-        fig.update_layout(title='Del histórico a la decisión futura')
-
-    fig.update_layout(height=520)
-    st.plotly_chart(fig,use_container_width=True)
-    explain(
-        'La portada usa únicamente meses con ≥95% de cobertura económica. La misma cantidad de materiales se mantiene fija; solo cambian precios comparables. Los meses con cobertura insuficiente no se usan para concluir tendencia.',
-        'Entender en segundos si estamos construyendo mejor, qué explica el resultado y dónde concentrar la siguiente decisión.'
-    )
-
-    st.markdown("### 🧭 La historia en cuatro preguntas")
-    c1,c2,c3,c4=st.columns(4)
-    with c1:
-        st.markdown("<div class='card'><div class='title'>1. ¿Qué necesita una casa?</div><div class='meta'>La pestaña Receta convierte el consolidado histórico en cantidades por vivienda.</div></div>",unsafe_allow_html=True)
-    with c2:
-        st.markdown("<div class='card'><div class='title'>2. ¿Estamos bajando el costo?</div><div class='meta'>Tendencia revaloriza la misma receta con precios históricos comparables.</div></div>",unsafe_allow_html=True)
-    with c3:
-        st.markdown("<div class='card'><div class='title'>3. ¿Qué lo explica?</div><div class='meta'>Proveedores y Precios muestran MIN, MAX, gasto y comportamiento de compra.</div></div>",unsafe_allow_html=True)
-    with c4:
-        st.markdown("<div class='card'><div class='title'>4. ¿Qué hacemos después?</div><div class='meta'>Casas 5 y 6 transforma el aprendizaje en cantidades, proveedor y precio meta.</div></div>",unsafe_allow_html=True)
+    st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Receta estándar</div><div class='value'>{money(story_cost)}</div><div class='sub'>referencia por casa</div></div><div class='kpi'><div class='label'>Mejor costo histórico</div><div class='value'>{money(minrow.Costo)}</div><div class='sub'>{minrow.Casa} · {minrow.Sistema}</div></div><div class='kpi'><div class='label'>Cambio Casa 1 → 4</div><div class='value'>{total_change:+.1f}%</div><div class='sub'>{money(last.Costo-first.Costo)}</div></div><div class='kpi'><div class='label'>Oportunidad Casas 5+6</div><div class='value'>{money(story_saving)}</div><div class='sub'>vs precio meta de compra</div></div></div>",unsafe_allow_html=True)
 
 
 
