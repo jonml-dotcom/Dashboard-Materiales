@@ -542,6 +542,137 @@ def house_1_2_overlap_audit(df, value_col):
         'drivers':comp,'sb_qty_jan6':qty2
     }
 
+
+def forensic_c1_c2_reconstruction(d, recipe, value_col, spill_days=90):
+    """
+    Reconstrucción conservadora Casa 1 vs Casa 2:
+    1) detecta déficit de receta en Casa 1;
+    2) busca exceso del mismo material en Casa 2;
+    3) solo toma compras tempranas de la ventana 2 (spill_days) y componentes de etapa tardía;
+    4) asigna costo usando las líneas/facturas reales;
+    5) separa la factura Superbloque 25/03/2025 como 'estructural disputada',
+       porque cae 2 días después del corte y coincide con acabados rezagados.
+    """
+    x=d.copy()
+    c1_ini,c1_fin=pd.Timestamp('2024-11-01'),pd.Timestamp('2025-03-22')
+    c2_ini,c2_fin=pd.Timestamp('2025-03-23'),pd.Timestamp('2025-08-31')
+    c1=x[x.Fecha.between(c1_ini,c1_fin,inclusive='both')].copy()
+    c2=x[x.Fecha.between(c2_ini,c2_fin,inclusive='both')].copy()
+
+    # Expected quantity per homologated material from the standard recipe.
+    exp=(recipe[~recipe.Confianza_receta.eq('Revisar sistema')]
+         .groupby('Material_homologado',as_index=False)
+         .Cantidad_por_casa.sum()
+         .rename(columns={'Cantidad_por_casa':'Esperado'}))
+
+    late_components={
+        'Pisos / revestimientos','Divisiones / cielos','Instalación eléctrica',
+        'Instalación hidrosanitaria','Pintura / acabados','Puertas / ventanas',
+        'Baños / sanitarios','Carpintería / melamina'
+    }
+    q1=c1.groupby('Material_homologado').Cantidad.sum()
+    q2=c2.groupby('Material_homologado').Cantidad.sum()
+    cutoff=c2_ini+pd.Timedelta(days=spill_days)
+
+    transfers=[]
+    for _,er in exp.iterrows():
+        mat=er.Material_homologado
+        expected=float(er.Esperado or 0)
+        if expected<=0:
+            continue
+        zmat=x[x.Material_homologado.eq(mat)]
+        if zmat.empty:
+            continue
+        component=zmat.Componente_fisico.mode()
+        component=component.iloc[0] if len(component) else 'Otros materiales de la vivienda'
+        if component not in late_components:
+            continue
+
+        prev=float(q1.get(mat,0) or 0)
+        nxt=float(q2.get(mat,0) or 0)
+        deficit=max(expected-prev,0)
+        surplus=max(nxt-expected,0)
+        target=min(deficit,surplus)
+        if target<=0:
+            continue
+
+        # Use actual early invoices from Casa-2 window; closest to boundary first.
+        zz=c2[(c2.Material_homologado.eq(mat)) & (c2.Fecha<=cutoff)].sort_values(['Fecha','Factura','Linea_id'])
+        remaining=target
+        for _,r in zz.iterrows():
+            if remaining<=1e-9:
+                break
+            qty=float(r.Cantidad or 0)
+            if qty<=0:
+                continue
+            take=min(qty,remaining)
+            unit_cost=float(r[value_col] or 0)/qty
+            transfers.append({
+                'Material':mat,'Componente':component,'Fecha':r.Fecha,'Factura':r.Factura,
+                'Proveedor':r.Proveedor,'Cantidad_linea':qty,'Cantidad_reasignada':take,
+                'Costo_reasignado':take*unit_cost,'Esperado_receta':expected,
+                'Cantidad_Casa1_ventana':prev,'Cantidad_Casa2_ventana':nxt
+            })
+            remaining-=take
+
+    tr=pd.DataFrame(transfers)
+    moved=float(tr.Costo_reasignado.sum()) if len(tr) else 0.0
+
+    # Structural invoice immediately after the cut: do not silently assign it.
+    disputed=c2[
+        c2.Proveedor.str.contains('SUPERBLOQUE',case=False,na=False) &
+        c2.Fecha.eq(pd.Timestamp('2025-03-25'))
+    ].copy()
+    disputed_cost=float(disputed[value_col].sum()) if len(disputed) else 0.0
+    disputed_system=float(disputed.loc[
+        disputed.Descripcion_original.str.contains('Sistema Mixto Superblock',case=False,na=False),
+        value_col
+    ].sum()) if len(disputed) else 0.0
+
+    raw1=float(c1[value_col].sum())
+    raw2=float(c2[value_col].sum())
+    # High-confidence material correction only.
+    adj1=raw1+moved
+    adj2=raw2-moved
+    # Audit scenario: material spillover + structural invoice kept outside C2 until attribution is resolved.
+    scenario2=adj2-disputed_cost
+
+    detail=(tr.groupby(['Material','Componente'],as_index=False)
+            .agg(Cantidad_reasignada=('Cantidad_reasignada','sum'),
+                 Costo_reasignado=('Costo_reasignado','sum'),
+                 Primera_factura=('Fecha','min'),
+                 Ultima_factura=('Fecha','max'),
+                 Esperado_receta=('Esperado_receta','max'),
+                 Cantidad_Casa1_ventana=('Cantidad_Casa1_ventana','max'),
+                 Cantidad_Casa2_ventana=('Cantidad_Casa2_ventana','max'))
+            .sort_values('Costo_reasignado',ascending=False)) if len(tr) else pd.DataFrame()
+
+    return {
+        'raw1':raw1,'raw2':raw2,'moved':moved,'adj1':adj1,'adj2':adj2,
+        'disputed_cost':disputed_cost,'disputed_system':disputed_system,
+        'scenario2':scenario2,'transfers':tr,'detail':detail,'cutoff':cutoff,
+        'disputed':disputed
+    }
+
+
+def reconstructed_house_costs(d, recipe, value_col, house_area):
+    h=house_cost_history(d,value_col,house_area).copy()
+    audit=forensic_c1_c2_reconstruction(d,recipe,value_col,spill_days=90)
+    h['Costo_raw']=h.Costo
+    h['Estado']='Ventana temporal'
+    # Reconstruct C1 with identifiable late-stage material spillover.
+    h.loc[h.Casa.eq('Casa 1'),'Costo']=audit['adj1']
+    h.loc[h.Casa.eq('Casa 1'),'Estado']='Reconstruido · materiales rezagados'
+    # For C2, present the audit scenario: remove the same spillover and hold disputed 25/03 structural invoice outside.
+    h.loc[h.Casa.eq('Casa 2'),'Costo']=audit['scenario2']
+    h.loc[h.Casa.eq('Casa 2'),'Estado']='Reconstruido · Superbloque 25/03 pendiente de atribución'
+    h['Costo_m2']=h.Costo/house_area if house_area else np.nan
+    h['Delta']=h.Costo.diff()
+    h['Delta_pct']=h.Costo.pct_change()*100
+    first=float(h.iloc[0].Costo) if len(h) else 0
+    h['Indice']=h.Costo/first*100 if first else np.nan
+    return h,audit
+
 # ---------------- Sidebar / assumptions ----------------
 df0=load_data()
 with st.sidebar:
@@ -657,8 +788,8 @@ with T['🎬 Historia']:
 
     st.markdown('---')
     # Segundo gráfico de portada: costo histórico casa por casa.
-    st.markdown('### 🏠 Costo histórico registrado · Casa 1 vs Casa 2 vs Casa 3 vs Casa 4')
-    cover_hc=house_cost_history(df,value_col,house_area)
+    st.markdown('### 🏠 Costo reconstruido por casa · auditoría de solapes')
+    cover_hc,cover_audit=reconstructed_house_costs(df,recipe,value_col,house_area)
     cover_view=st.selectbox(
         'Visualización de comparación casa por casa',
         ['Línea comparativa','Barras comparativas','Slope','Índice Casa 1 = 100','Costo por m²'],
@@ -669,8 +800,8 @@ with T['🎬 Historia']:
             x=cover_hc.Casa,y=cover_hc.Costo,mode='lines+markers+text',
             text=[f"{money(r.Costo)}<br>{r.Sistema}" for _,r in cover_hc.iterrows()],
             textposition='top center',
-            customdata=np.c_[cover_hc.Sistema,cover_hc.Costo_m2,cover_hc.Delta_pct],
-            hovertemplate='<b>%{x}</b><br>%{customdata[0]}<br>Costo: ₡%{y:,.0f}<br>₡/m²: ₡%{customdata[1]:,.0f}<br>Variación: %{customdata[2]:.1f}%<extra></extra>',
+            customdata=np.c_[cover_hc.Sistema,cover_hc.Costo_m2,cover_hc.Delta_pct,cover_hc.Estado],
+            hovertemplate='<b>%{x}</b><br>%{customdata[0]}<br>Costo: ₡%{y:,.0f}<br>₡/m²: ₡%{customdata[1]:,.0f}<br>Variación: %{customdata[2]:.1f}%<br>Estado: %{customdata[3]}<extra></extra>',
             line=dict(width=5),marker=dict(size=14)
         ))
         cover_fig.update_layout(title='Costo registrado por casa y sistema constructivo',yaxis_title='Costo registrado (₡)',height=570)
@@ -715,26 +846,43 @@ with T['🎬 Historia']:
     )
 
 
-    st.markdown('### 🕵️ Auditoría de la diferencia Casa 1 vs Casa 2')
-    ov=house_1_2_overlap_audit(df,value_col)
-    st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Casa 1 · ventana actual</div><div class='value'>{money(ov['c1'])}</div><div class='sub'>01/11/2024–22/03/2025</div></div><div class='kpi'><div class='label'>Casa 2 · ventana actual</div><div class='value'>{money(ov['c2'])}</div><div class='sub'>23/03/2025–31/08/2025</div></div><div class='kpi'><div class='label'>Diferencia</div><div class='value'>{money(ov['delta'])}</div><div class='sub'>{ov['pct']:+.1f}%</div></div><div class='kpi'><div class='label'>Acabados adicionales en ventana 2</div><div class='value'>{money(ov['finish_delta'])}</div><div class='sub'>señal de posible solape</div></div></div>",unsafe_allow_html=True)
+    st.markdown('### 🕵️ Qué estaba cargado en Casa 2 y faltaba en Casa 1')
+    ov=cover_audit
+    st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Gasto raw Casa 1</div><div class='value'>{money(ov['raw1'])}</div><div class='sub'>antes de reconstrucción</div></div><div class='kpi'><div class='label'>Material rezagado identificado</div><div class='value'>{money(ov['moved'])}</div><div class='sub'>reasignado Casa 2 → Casa 1</div></div><div class='kpi'><div class='label'>Superbloque 25/03 en revisión</div><div class='value'>{money(ov['disputed_cost'])}</div><div class='sub'>2 días después del corte</div></div><div class='kpi'><div class='label'>Casa 2 · escenario auditado</div><div class='value'>{money(ov['scenario2'])}</div><div class='sub'>sin solape + factura estructural disputada</div></div></div>",unsafe_allow_html=True)
 
-    topd=ov['drivers'].head(10).copy()
-    af=px.bar(topd.sort_values('Delta'),x='Delta',y='Familia',orientation='h',
-              hover_data=['Casa1','Casa2'])
-    af.update_layout(title='Familias que explican el exceso de gasto de la ventana Casa 2',height=520,xaxis_title='Casa 2 − Casa 1 (₡)')
-    st.plotly_chart(af,use_container_width=True)
-    explain(
-        'Las barras muestran cuánto más se gastó en cada familia durante la ventana asignada a Casa 2 respecto a la ventana asignada a Casa 1.',
-        'No aceptar la diferencia Casa 1 vs Casa 2 como costo real por vivienda hasta reconstruir la atribución de facturas que cruzan fases de obra.',
-        f"La ventana Casa 2 supera a Casa 1 en {money(ov['delta'])}. Solo las familias de acabados/instalaciones explican aproximadamente {money(ov['finish_delta'])} adicionales. Además, la factura de Superbloque del 06/01/2025 registra cantidad {ov['sb_qty_jan6']:.0f} del sistema mixto, evidencia de que una sola ventana temporal puede contener materiales para más de una vivienda."
-    )
-    st.warning("⚠️ Hallazgo de auditoría: las fechas por sí solas NO son suficientes para atribuir todo el gasto a una casa. Casa 1 casi no contiene pisos, gypsum, carpintería/mobiliario ni otros acabados, mientras esos rubros aparecen con fuerza después del 23/03/2025. Al mismo tiempo, el 25/03/2025 entra otro sistema Superbloque. Esto indica fases solapadas: acabados de una casa pueden coincidir con el arranque estructural de la siguiente.")
-    st.markdown("<div class='sourcebox'><b>Metodología recomendada para el costo histórico definitivo:</b> 1) asignar primero las facturas con evidencia directa de casa/sistema; 2) separar compras compartidas o de varias unidades; 3) usar secuencia constructiva para detectar acabados que pertenecen a la vivienda anterior; 4) distribuir compras comunes solo cuando no exista una evidencia mejor; 5) mantener un nivel de confianza por línea. Hasta terminar esa reconstrucción, el gráfico debe leerse como <b>gasto registrado por ventana temporal</b>, no como costo definitivo auditado por casa.</div>",unsafe_allow_html=True)
+    if len(ov['detail']):
+        matv=ov['detail'].head(18).sort_values('Costo_reasignado')
+        mfig=px.bar(matv,x='Costo_reasignado',y='Material',orientation='h',
+                    hover_data=['Componente','Cantidad_reasignada','Esperado_receta',
+                                'Cantidad_Casa1_ventana','Cantidad_Casa2_ventana',
+                                'Primera_factura','Ultima_factura'])
+        mfig.update_layout(title='Materiales detectados en exceso en la ventana Casa 2 y deficitarios en Casa 1',
+                           xaxis_title='Costo reasignado a Casa 1 (₡)',height=650)
+        st.plotly_chart(mfig,use_container_width=True)
+        explain(
+            'Para cada material se compara la cantidad esperada de la receta con lo comprado en ambas ventanas. Solo se reasignan compras de etapas tardías hechas durante los primeros 90 días después del corte y únicamente cuando Casa 1 tiene déficit y Casa 2 tiene exceso.',
+            'Usar la reconstrucción como costo histórico de trabajo y mantener las líneas de baja certeza abiertas hasta validar con la secuencia de obra o evidencia adicional.',
+            f"Se identificaron {len(ov['detail'])} materiales con patrón compatible con solape, por {money(ov['moved'])}. Los de mayor impacto son " + ', '.join(ov['detail'].head(5).Material.astype(str).tolist()) + "."
+        )
+        st.dataframe(
+            ov['detail'][['Material','Componente','Cantidad_Casa1_ventana','Esperado_receta',
+                          'Cantidad_Casa2_ventana','Cantidad_reasignada','Costo_reasignado',
+                          'Primera_factura','Ultima_factura']].head(30),
+            use_container_width=True,hide_index=True
+        )
+
+    st.markdown('### 🧱 La diferencia restante: factura Superbloque del 25/03/2025')
+    st.warning(f"Después de devolver a Casa 1 los materiales tardíos identificables, todavía queda una diferencia importante. El principal elemento es la factura Superbloque del 25/03/2025 por {money(ov['disputed_cost'])}, de los cuales {money(ov['disputed_system'])} corresponden al Sistema Mixto Superblock. Está apenas 2 días después del corte y coincide con compras de acabados de la vivienda anterior. Por eso el gráfico reconstruido NO la carga automáticamente a Casa 2: la mantiene como costo estructural pendiente de atribución.")
+    if len(ov['disputed']):
+        st.dataframe(
+            ov['disputed'][['Fecha','Factura','Proveedor','Descripcion_original','Cantidad','Total_linea']].copy(),
+            use_container_width=True,hide_index=True
+        )
+    st.markdown(f"<div class='sourcebox'><b>Resultado de la reconstrucción Casa 1–Casa 2:</b> Casa 1 pasa de {money(ov['raw1'])} a aproximadamente <b>{money(ov['adj1'])}</b> al recibir materiales tardíos que su receta necesitaba. Casa 2 pasa de {money(ov['raw2'])} a <b>{money(ov['adj2'])}</b> por esa misma corrección. Si además se mantiene fuera de Casa 2 la factura estructural disputada del 25/03 hasta resolver a qué vivienda corresponde, el escenario auditado de Casa 2 queda en aproximadamente <b>{money(ov['scenario2'])}</b>. Esto explica por qué la diferencia inicial parecía artificialmente grande.</div>",unsafe_allow_html=True)
 
     st.markdown('### 🏠 Costo y sistema, casa por casa')
     cols=st.columns(4)
-    for i,(_,r) in enumerate(hc.iterrows()):
+    for i,(_,r) in enumerate(cover_hc.iterrows()):
         var='Punto de partida' if pd.isna(r.Delta_pct) else f"{r.Delta_pct:+.1f}% vs anterior"
         cols[i].markdown(f"<div class='card'><div class='title'>{r.Casa}</div><div class='big'>{money(r.Costo)}</div><div class='meta'><b>{r.Sistema}</b><br>{money(r.Costo_m2)}/m²<br>{var}<br>{r.Inicio:%d/%m/%Y} → {r.Fin:%d/%m/%Y}</div></div>",unsafe_allow_html=True)
 
@@ -746,7 +894,7 @@ with T['🎬 Historia']:
     story_cost=story_recipe.Costo_por_casa.sum()
     story_plan=plan_future(df,recipe,value_col,price_view,2,waste)
     story_saving=story_plan.Ahorro_potencial.sum() if len(story_plan) else np.nan
-    st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Receta estándar</div><div class='value'>{money(story_cost)}</div><div class='sub'>referencia por casa</div></div><div class='kpi'><div class='label'>Mejor costo histórico</div><div class='value'>{money(minrow.Costo)}</div><div class='sub'>{minrow.Casa} · {minrow.Sistema}</div></div><div class='kpi'><div class='label'>Cambio Casa 1 → 4</div><div class='value'>{total_change:+.1f}%</div><div class='sub'>{money(last.Costo-first.Costo)}</div></div><div class='kpi'><div class='label'>Oportunidad Casas 5+6</div><div class='value'>{money(story_saving)}</div><div class='sub'>vs precio meta de compra</div></div></div>",unsafe_allow_html=True)
+    st.markdown(f"<div class='kpi-grid'><div class='kpi'><div class='label'>Receta estándar</div><div class='value'>{money(story_cost)}</div><div class='sub'>referencia por casa</div></div><div class='kpi'><div class='label'>Mejor costo histórico</div><div class='value'>{money(cheapest.Costo)}</div><div class='sub'>{cheapest.Casa} · {cheapest.Sistema}</div></div><div class='kpi'><div class='label'>Cambio Casa 1 → 4</div><div class='value'>{cover_change:+.1f}%</div><div class='sub'>{money(c4.Costo-c1.Costo)}</div></div><div class='kpi'><div class='label'>Oportunidad Casas 5+6</div><div class='value'>{money(story_saving)}</div><div class='sub'>vs precio meta de compra</div></div></div>",unsafe_allow_html=True)
 
 
 
