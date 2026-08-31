@@ -6,6 +6,39 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+
+def house_cost_history(df, value_col, house_area):
+    """Costo registrado por ciclo de vivienda.
+    La fecha visible del gráfico corresponde al cierre del ciclo.
+    """
+    specs = [
+        ('Casa 1', 'Superbloque', pd.Timestamp('2024-11-01'), pd.Timestamp('2025-03-22')),
+        ('Casa 2', 'Superbloque', pd.Timestamp('2025-03-23'), pd.Timestamp('2025-08-31')),
+        ('Casa 3', 'Superbloque', pd.Timestamp('2025-09-01'), pd.Timestamp('2026-03-22')),
+        ('Casa 4', 'Block convencional', pd.Timestamp('2026-03-23'), pd.Timestamp('2026-08-31')),
+    ]
+    rows = []
+    for casa, sistema, ini, fin in specs:
+        z = df[df['Fecha'].between(ini, fin, inclusive='both')].copy()
+        costo = float(pd.to_numeric(z[value_col], errors='coerce').fillna(0).sum())
+        rows.append({
+            'Casa': casa,
+            'Sistema': sistema,
+            'Inicio': ini,
+            'Fin': fin,
+            'Fecha_grafico': fin,
+            'Costo': costo,
+            'Costo_m2': costo / house_area if house_area else np.nan,
+            'Lineas': len(z),
+        })
+    h = pd.DataFrame(rows)
+    h['Delta'] = h['Costo'].diff()
+    h['Delta_pct'] = h['Costo'].pct_change() * 100
+    first = float(h.iloc[0]['Costo']) if len(h) else 0
+    h['Indice'] = h['Costo'] / first * 100 if first else np.nan
+    return h
+
+
 st.set_page_config(page_title="Construir Mejor · V7 MASTER DECISION", page_icon="🏠", layout="wide", initial_sidebar_state="expanded")
 BASE = Path(__file__).with_name("base_maestra_homologada_2392.csv")
 RECIPE_TYPES = ["Material permanente", "Material/consumible", "Consumible de obra"]
