@@ -8,6 +8,153 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Construir Mejor",page_icon="🏗️",layout="wide",initial_sidebar_state="expanded")
+
+st.markdown("""
+<style>
+/* JUSTIFICADO GLOBAL Y RESPONSIVE */
+.stMarkdown p,
+.stMarkdown li,
+.stCaptionContainer,
+div[data-testid="stCaptionContainer"],
+div[data-testid="stAlert"] p,
+div[data-testid="stAlert"] div,
+div[data-testid="stNotification"] p,
+div[data-testid="stNotification"] div,
+div[data-testid="stExpander"] p,
+div[data-testid="stExpander"] li,
+div[data-testid="stForm"] p,
+div[data-testid="stForm"] li,
+.hero p,
+.sourcebox,
+.explain,
+.material-card,
+.material-card .meta,
+.rec-card,
+.rec-card .meta,
+.rec-card .signal,
+.house-card,
+.house-card .house-name,
+.house-card .delta-flat,
+.house-card .delta-up,
+.house-card .delta-down,
+.kpi .label,
+.kpi .sub,
+.stage,
+.stage small,
+.chip,
+label[data-testid="stWidgetLabel"] p,
+div[data-testid="stWidgetLabel"] p {
+    text-align: justify !important;
+    text-justify: inter-word !important;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+/* Evitar cortes o desbordes en encabezados */
+.hero h1,
+.stMarkdown h1,
+.stMarkdown h2,
+.stMarkdown h3,
+.stMarkdown h4,
+.stMarkdown h5,
+.stMarkdown h6 {
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+/* Tablas responsive */
+div[data-testid="stDataFrame"] *,
+div[data-testid="stTable"] * {
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+/* Números, botones, tabs y selects conservan alineación natural */
+div[data-testid="stMetricValue"],
+button,
+.stButton button,
+div[role="tab"],
+[data-baseweb="select"] {
+    text-align: initial;
+}
+
+/* Tablet */
+@media (max-width: 900px) {
+    .stMarkdown p,
+    .stMarkdown li,
+    .stCaptionContainer,
+    div[data-testid="stCaptionContainer"],
+    div[data-testid="stAlert"] p,
+    div[data-testid="stAlert"] div,
+    .hero p,
+    .sourcebox,
+    .explain,
+    .material-card,
+    .material-card .meta,
+    .rec-card,
+    .rec-card .meta,
+    .rec-card .signal,
+    .house-card,
+    .house-card .house-name,
+    .kpi .label,
+    .kpi .sub,
+    .stage,
+    .stage small {
+        text-align: justify !important;
+        text-justify: inter-word !important;
+        hyphens: auto;
+        -webkit-hyphens: auto;
+        overflow-wrap: anywhere;
+    }
+
+    .hero h1 {
+        font-size: clamp(1.65rem, 6vw, 2.4rem) !important;
+        line-height: 1.12 !important;
+    }
+
+    .sourcebox,
+    .explain,
+    .material-card,
+    .rec-card,
+    .house-card {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+}
+
+/* Móvil: mantiene justificado sin desbordar */
+@media (max-width: 600px) {
+    .stMarkdown p,
+    .stMarkdown li,
+    .stCaptionContainer,
+    div[data-testid="stCaptionContainer"],
+    div[data-testid="stAlert"] p,
+    div[data-testid="stAlert"] div,
+    .hero p,
+    .sourcebox,
+    .explain,
+    .material-card,
+    .material-card .meta,
+    .rec-card,
+    .rec-card .meta,
+    .house-card,
+    .house-card .house-name,
+    .kpi .label,
+    .kpi .sub {
+        text-align: justify !important;
+        text-justify: inter-word !important;
+        hyphens: auto;
+        -webkit-hyphens: auto;
+        overflow-wrap: anywhere;
+        line-height: 1.45;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
 HERE=Path(__file__).resolve().parent
 BASE=HERE/"base_maestra_homologada_2392.csv"
 ALLOC=HERE/"asignacion_auditada_4_casas.csv"
